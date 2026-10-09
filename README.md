@@ -7,6 +7,15 @@ The hallway is ray traced in a WebGPU fragment shader (`src/shaders/hallway.wgsl
 using the original asset's tile hash, colours, 33-column corner warp, 24-ring
 repeat and 1.7px grout.
 
+![Title screen with the light at the end of the hallway](docs/screenshots/title.png)
+
+| | |
+|---|---|
+| ![A pit, a pillar, a low wall and a beam ahead](docs/screenshots/obstacles.png) | ![Sliding under a beam in the left lane](docs/screenshots/slide.png) |
+| Pit, pillar, low wall and beam | Sliding under a beam |
+| ![Mid-jump over a pit in the right lane](docs/screenshots/jump.png) | |
+| Jumping a pit | |
+
 ## Run
 
 ```sh
