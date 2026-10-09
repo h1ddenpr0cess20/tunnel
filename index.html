@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Neverending Hallway</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="stage">
+  <canvas data-dc-hallway="main" role="img" aria-label="An endless square hallway lined with red tiles, moving forward"></canvas>
+  <canvas id="overlay" aria-hidden="true"></canvas>
+</div>
+
+<div class="hud" id="hud" hidden>
+  <div><span class="lab">Distance</span><span class="val" id="dist">0 m</span></div>
+  <div class="right"><span class="lab">To the light</span><span class="val" id="light">1000.0 m</span></div>
+</div>
+
+<div class="panel" id="title">
+  <h1>Neverending Hallway</h1>
+  <p>Run for the light. Jump the pits and low walls.</p>
+  <p class="go">Space, ↑ or tap to jump · press to start</p>
+</div>
+
+<div class="panel" id="over" hidden>
+  <h1 id="over-head">You fell</h1>
+  <p id="over-dist"></p>
+  <p id="over-light"></p>
+  <p class="go">Press space or tap to run again</p>
+</div>
+
+<script src="hallway.js"></script>
+<script src="sound.js"></script>
+<script src="overlay.js"></script>
+<script src="game.js"></script>
+</body>
+</html>

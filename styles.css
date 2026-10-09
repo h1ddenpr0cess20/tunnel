@@ -1,0 +1,61 @@
+/* Page styles from the original hallway file, plus the game's HUD and panels. */
+body { margin: 0; background: #100101; }
+a { color: #df484d; }
+a:hover { color: #ffffff; }
+
+[hidden] { display: none !important; }
+
+.stage {
+  position: relative;
+  width: 100%;
+  height: 100vh;
+  min-height: 320px;
+  overflow: hidden;
+  background: #100101;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.stage canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.hud {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  right: 16px;
+  display: flex;
+  justify-content: space-between;
+  pointer-events: none;
+  font: 14px/1.4 -apple-system, BlinkMacSystemFont, sans-serif;
+  color: #ffffff;
+  text-shadow: 0 1px 3px #100101;
+}
+.hud > div { display: grid; }
+.hud .right { text-align: right; }
+.lab { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; opacity: 0.7; }
+.val { font-size: 20px; font-variant-numeric: tabular-nums; }
+
+.panel {
+  position: fixed;
+  left: 50%;
+  bottom: 10vh;
+  transform: translateX(-50%);
+  width: min(480px, calc(100% - 32px));
+  padding: 20px;
+  box-sizing: border-box;
+  text-align: center;
+  background: rgba(16, 1, 1, 0.85);
+  color: #ffffff;
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, sans-serif;
+  pointer-events: none;
+}
+.panel h1 { margin: 0 0 8px; font-size: 28px; font-weight: 600; color: #df484d; }
+.panel p { margin: 4px 0; }
+.panel .go { margin-top: 12px; font-size: 13px; opacity: 0.75; }
