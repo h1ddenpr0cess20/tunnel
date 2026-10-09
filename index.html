@@ -4,35 +4,63 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Neverending Hallway</title>
-<link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<div class="stage">
-  <canvas data-dc-hallway="main" role="img" aria-label="An endless square hallway lined with red tiles, moving forward"></canvas>
-  <canvas id="overlay" aria-hidden="true"></canvas>
-</div>
+<canvas id="hall" role="img" aria-label="First-person view down an endless square hallway lined with red tiles, with a light at the far end"></canvas>
 
 <div class="hud" id="hud" hidden>
-  <div><span class="lab">Distance</span><span class="val" id="dist">0 m</span></div>
-  <div class="right"><span class="lab">To the light</span><span class="val" id="light">1000.0 m</span></div>
+  <div class="stat">
+    <span class="lab">Distance run</span>
+    <span class="val" id="dist">0 m</span>
+  </div>
+  <div class="stat right">
+    <span class="lab">To the light</span>
+    <span class="val" id="light">1000.0 m</span>
+  </div>
 </div>
 
-<div class="panel" id="title">
+<p class="whisper" id="whisper" aria-live="polite"></p>
+
+<section class="panel" id="title">
   <h1>Neverending Hallway</h1>
-  <p>Run for the light. Jump the pits and low walls.</p>
-  <p class="go">Space, ↑ or tap to jump · press to start</p>
-</div>
+  <p class="lede">There is a light at the end. Run to it.</p>
+  <dl class="keys kb-only">
+    <dt><kbd>Space</kbd> <kbd>↑</kbd></dt><dd>jump pits and low walls</dd>
+    <dt><kbd>↓</kbd> <kbd>S</kbd></dt><dd>slide under beams</dd>
+    <dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>change lanes around pillars</dd>
+    <dt><kbd>P</kbd> <kbd>M</kbd></dt><dd>pause, sound</dd>
+  </dl>
+  <dl class="keys touch-only">
+    <dt>swipe up</dt><dd>jump pits and low walls</dd>
+    <dt>swipe down</dt><dd>slide under beams</dd>
+    <dt>swipe sideways</dt><dd>change lanes around pillars</dd>
+  </dl>
+  <p class="go"><span class="kb-only">Press space to run</span><span class="touch-only">Tap to run</span></p>
+  <p class="dim" id="best-title" hidden></p>
+</section>
 
-<div class="panel" id="over" hidden>
-  <h1 id="over-head">You fell</h1>
-  <p id="over-dist"></p>
-  <p id="over-light"></p>
-  <p class="go">Press space or tap to run again</p>
-</div>
+<section class="panel" id="over" hidden>
+  <h2 id="over-head">you fell</h2>
+  <p class="big" id="over-dist">0 m</p>
+  <p class="lede" id="over-light"></p>
+  <p class="dim" id="over-best"></p>
+  <p class="go"><span class="kb-only">Press space to run again</span><span class="touch-only">Tap to run again</span></p>
+</section>
 
-<script src="hallway.js"></script>
-<script src="sound.js"></script>
-<script src="overlay.js"></script>
-<script src="game.js"></script>
+<section class="panel" id="paused" hidden>
+  <h2>paused</h2>
+  <p class="go"><span class="kb-only">Press P to keep running</span><span class="touch-only">Tap to keep running</span></p>
+</section>
+
+<section class="panel" id="error" hidden>
+  <h2>WebGPU is needed</h2>
+  <p class="lede" id="error-msg"></p>
+  <p class="dim">Try a current version of Chrome, Edge or Safari.</p>
+</section>
+
+<button class="ctl" id="pause" type="button" hidden>Pause</button>
+<button class="ctl" id="snd" type="button">Sound on</button>
+
+<script type="module" src="/src/main.js"></script>
 </body>
 </html>
