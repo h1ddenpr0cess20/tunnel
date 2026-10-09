@@ -30,7 +30,7 @@ export function createHud(store) {
     over: $('over'), overHead: $('over-head'), overDist: $('over-dist'), overLight: $('over-light'), overBest: $('over-best'),
     paused: $('paused'), pauseBtn: $('pause'), snd: $('snd'), error: $('error'), errorMsg: $('error-msg'),
   };
-  let best = Number(store.get('nh-best')) || 0;
+  let best = Number(store.get('nt-best')) || 0;
   let milestone = 0;
   let timer = 0;
   let last = '';
@@ -73,7 +73,7 @@ export function createHud(store) {
     die() { el.pauseBtn.hidden = true; },
     over(kind, m) {
       const isBest = m > best;
-      if (isBest) { best = m; store.set('nh-best', String(Math.floor(m))); }
+      if (isBest) { best = m; store.set('nt-best', String(Math.floor(m))); }
       el.overHead.textContent = DEATH[kind] || 'you stopped';
       el.overDist.textContent = `${fmtM(m)} m`;
       el.overLight.textContent = `The light is still ${fmtLight(lightLeft(m))} m away.`;

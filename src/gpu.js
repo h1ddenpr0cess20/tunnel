@@ -1,5 +1,5 @@
-// WebGPU setup: one full-screen triangle running src/shaders/hallway.wgsl.
-import shaderCode from './shaders/hallway.wgsl?raw';
+// WebGPU setup: one full-screen triangle running src/shaders/tunnel.wgsl.
+import shaderCode from './shaders/tunnel.wgsl?raw';
 
 // Matches struct Uniforms in the shader: 4 vec4 header + 8 pits + 16 + 16 boxes.
 export const UNIFORM_FLOATS = (4 + 8 + 16 + 16) * 4;
@@ -21,7 +21,7 @@ export async function createRenderer(canvas) {
   const module = device.createShaderModule({ code: shaderCode });
   const info = await module.getCompilationInfo();
   const errors = info.messages.filter(m => m.type === 'error');
-  if (errors.length) throw new Error(errors.map(m => `hallway.wgsl:${m.lineNum}: ${m.message}`).join('\n'));
+  if (errors.length) throw new Error(errors.map(m => `tunnel.wgsl:${m.lineNum}: ${m.message}`).join('\n'));
 
   const pipeline = device.createRenderPipeline({
     layout: 'auto',

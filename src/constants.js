@@ -1,4 +1,4 @@
-// Shared numbers. Tile geometry matches the original hallway and src/shaders/hallway.wgsl.
+// Shared numbers. Tile geometry matches the original tunnel and src/shaders/tunnel.wgsl.
 
 export const N = 33;              // tiles per side
 export const RING = 0.056;        // ring depth in tunnel half-widths

@@ -1,4 +1,4 @@
-// Synthesized sound: a low drone for the hallway and short effects.
+// Synthesized sound: a low drone for the tunnel and short effects.
 // Audio starts on the first key press or tap.
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -7,7 +7,7 @@ const store = {
 
 export const Sound = {
   ac: null, out: null, noise: null, droneF: null,
-  muted: store.get('nh-muted') === '1',
+  muted: store.get('nt-muted') === '1',
 
   init() {
     if (this.ac) { if (this.ac.state === 'suspended') this.ac.resume(); return; }
@@ -34,7 +34,7 @@ export const Sound = {
 
   setMuted(m) {
     this.muted = m;
-    store.set('nh-muted', m ? '1' : '0');
+    store.set('nt-muted', m ? '1' : '0');
     if (this.out) this.out.gain.setTargetAtTime(m ? 0 : 0.6, this.ac.currentTime, 0.05);
   },
 

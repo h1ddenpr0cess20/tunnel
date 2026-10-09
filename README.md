@@ -1,13 +1,13 @@
-# Neverending Hallway
+# Neverending Tunnel
 
-A first-person runner through the Neverending Hallway. Run for the light at the
+A first-person runner through the Neverending Tunnel. Run for the light at the
 end of the tunnel. You never reach it.
 
-The hallway is ray traced in a WebGPU fragment shader (`src/shaders/hallway.wgsl`)
+The tunnel is ray traced in a WebGPU fragment shader (`src/shaders/tunnel.wgsl`)
 using the original asset's tile hash, colours, 33-column corner warp, 24-ring
 repeat and 1.7px grout.
 
-![Title screen with the light at the end of the hallway](docs/screenshots/title.png)
+![Title screen with the light at the end of the tunnel](docs/screenshots/title.png)
 
 | | |
 |---|---|
@@ -35,7 +35,7 @@ Needs a browser with WebGPU (current Chrome, Edge or Safari).
 
 ## Layout
 
-- `src/shaders/hallway.wgsl`: tunnel, pits, obstacles and the light
+- `src/shaders/tunnel.wgsl`: tunnel, pits, obstacles and the light
 - `src/gpu.js`: WebGPU device, pipeline and uniform buffer
 - `src/game.js`: running, jumping, sliding, spawning and collisions
 - `src/main.js`: frame loop and uniform packing

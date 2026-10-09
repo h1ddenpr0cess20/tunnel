@@ -1,5 +1,5 @@
 // Game state: running, jumping, sliding, lanes, obstacles and collisions.
-// Positions are in tunnel half-widths; s is distance down the hallway.
+// Positions are in tunnel half-widths; s is distance down the tunnel.
 import {
   RING, LIGHT_D, M_PER_UNIT, LANE_EDGES, LANE_X,
   AIR, GRAV, V0, DUCK, SLIDE_T, WALL_TOP, BEAM_BOTTOM,

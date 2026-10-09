@@ -1,4 +1,4 @@
-// Neverending Hallway, ray traced. The tiles, colours and grout follow the
+// Neverending Tunnel, ray traced. The tiles, colours and grout follow the
 // original 2D painter exactly: 33 tiles per side warped toward the corners,
 // the same hash and shade thresholds, a pattern that repeats every 24 rings,
 // and grout a fixed 1.7 CSS pixels wide.

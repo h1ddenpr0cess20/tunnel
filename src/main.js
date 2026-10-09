@@ -86,7 +86,7 @@ function pack(data, view, t) {
 }
 
 async function boot() {
-  const canvas = document.getElementById('hall');
+  const canvas = document.getElementById('tunnel');
   let renderer;
   try {
     renderer = await createRenderer(canvas);
@@ -111,4 +111,4 @@ async function boot() {
 boot();
 
 // Hook for automated checks.
-window.__hallway = game;
+window.__tunnel = game;
