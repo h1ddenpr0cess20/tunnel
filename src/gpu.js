@@ -42,7 +42,11 @@ export async function createRenderer(canvas) {
   return {
     data,
     resize() {
-      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      // Lite (the TV default; `?full` turns it off) draws at a set lower height and lets the browser scale it up.
+      let dpr = Math.min(2, window.devicePixelRatio || 1);
+      const q = new URLSearchParams(location.search);
+      const tv = q.has('tv') || /FireTVApp|AFT/.test(navigator.userAgent);
+      if (q.has('lite') || (tv && !q.has('full'))) dpr = Math.min(dpr, (Number(q.get('height')) || 540) / Math.max(1, canvas.clientHeight));
       const w = Math.max(1, Math.round(canvas.clientWidth * dpr));
       const h = Math.max(1, Math.round(canvas.clientHeight * dpr));
       if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }

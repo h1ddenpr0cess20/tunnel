@@ -85,6 +85,16 @@ function pack(data, view, t) {
   data[10] = nb;
 }
 
+const params = new URLSearchParams(location.search);
+const tv = params.has('tv') || /FireTVApp|AFT/.test(navigator.userAgent);
+const lite = params.has('lite') || (tv && !params.has('full'));
+if (tv) {
+  // No space bar on a remote: Select starts.
+  for (const el of document.querySelectorAll('.go .kb-only')) {
+    el.textContent = el.textContent.replace(/press space/i, 'Press Select').replace('Press P ', 'Press Play/Pause ');
+  }
+}
+
 async function boot() {
   const canvas = document.getElementById('tunnel');
   let renderer;
@@ -96,8 +106,13 @@ async function boot() {
     return;
   }
   let last = null, tick = 0;
+  // In lite mode, draw every other frame: a steady 30 beats a stuttering 60.
+  const interval = lite ? 1000 / (Number(params.get('fps')) || 30) : 0;
+  let drawn = -1e9;
   function frame(now) {
     requestAnimationFrame(frame);
+    if (now - drawn < interval - 5) return;
+    drawn = now;
     const dt = last == null ? 0 : Math.min(0.05, Math.max(0, (now - last) / 1000));
     last = now;
     game.update(dt);

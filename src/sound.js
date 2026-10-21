@@ -5,6 +5,10 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, v); } catch { /* storage unavailable */ } },
 };
 
+// Lite (the TV default; `?full` turns it off).
+const Q = new URLSearchParams(location.search);
+const LITE = Q.has('lite') || ((Q.has('tv') || /FireTVApp|AFT/.test(navigator.userAgent)) && !Q.has('full'));
+
 export const Sound = {
   ac: null, out: null, noise: null, droneF: null,
   muted: store.get('nt-muted') === '1',
@@ -13,7 +17,14 @@ export const Sound = {
     if (this.ac) { if (this.ac.state === 'suspended') this.ac.resume(); return; }
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
-    try { this.ac = new AC(); } catch { return; }
+    try {
+      // On a TV (lite): a bigger buffer and half the sample rate, so the audio thread keeps up.
+      try { this.ac = new AC(LITE ? { latencyHint: 'playback', sampleRate: 22050 } : undefined); }
+      catch { this.ac = new AC(); }
+    } catch { return; }
+    // A starved audio thread can leave the context suspended or interrupted:
+    // bring it back unless the game itself is paused.
+    setInterval(() => { if (this.ac.state !== 'running' && !document.hidden) this.ac.resume().catch(() => {}); }, 1000);
     const ac = this.ac;
     this.out = ac.createGain();
     this.out.gain.value = this.muted ? 0 : 0.6;
