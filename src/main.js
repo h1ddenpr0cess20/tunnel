@@ -1,6 +1,7 @@
 import './styles.css';
 import { RING, LIGHT_D } from './constants.js';
 import { createRenderer, OFF_PITS, OFF_BMIN, OFF_BMAX, MAX_PITS, MAX_BOXES } from './gpu.js';
+import { createGLRenderer } from './gl.js';
 import { createGame } from './game.js';
 import { createHud } from './hud.js';
 import { bindInput } from './input.js';
@@ -85,15 +86,27 @@ function pack(data, view, t) {
   data[10] = nb;
 }
 
+// A canvas that has handed out a webgpu context cannot give out a webgl2 one.
+function replaceCanvas(old) {
+  const fresh = old.cloneNode(false);
+  old.replaceWith(fresh);
+  return fresh;
+}
+
 async function boot() {
   const canvas = document.getElementById('tunnel');
   let renderer;
   try {
     renderer = await createRenderer(canvas);
-  } catch (err) {
-    hud.error(err.message);
-    console.error(err);
-    return;
+  } catch (gpuErr) {
+    console.warn('WebGPU unavailable, falling back to WebGL 2:', gpuErr);
+    try {
+      renderer = createGLRenderer(replaceCanvas(canvas));
+    } catch (err) {
+      hud.error(err.message);
+      console.error(err);
+      return;
+    }
   }
   let last = null, tick = 0;
   function frame(now) {
