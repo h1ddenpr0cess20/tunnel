@@ -24,7 +24,8 @@ npm run dev      # http://localhost:5173
 npm run build    # static build in dist/
 ```
 
-Needs a browser with WebGPU (current Chrome, Edge or Safari).
+Uses WebGPU where available (current Chrome, Edge or Safari) and falls back to
+WebGL 2 with a GLSL port of the shader everywhere else.
 
 ## Controls
 
@@ -36,7 +37,9 @@ Needs a browser with WebGPU (current Chrome, Edge or Safari).
 ## Layout
 
 - `src/shaders/tunnel.wgsl`: tunnel, pits, obstacles and the light
+- `src/shaders/tunnel.vert`, `tunnel.frag`: GLSL port for the WebGL 2 fallback
 - `src/gpu.js`: WebGPU device, pipeline and uniform buffer
+- `src/gl.js`: WebGL 2 fallback renderer
 - `src/game.js`: running, jumping, sliding, spawning and collisions
 - `src/main.js`: frame loop and uniform packing
 - `src/input.js`, `src/hud.js`, `src/sound.js`: controls, HUD, audio
