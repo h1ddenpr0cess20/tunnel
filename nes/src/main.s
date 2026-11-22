@@ -2,7 +2,7 @@
 ; Pseudo-3D tunnel run: three lanes, jump pits and walls, slide under beams, dodge pillars.
 
 .segment "HEADER"
-  .byte "NES", $1A, 2, 1, $01, 0, 0, 0, 0, 0, 0, 0, 0, 0
+  .byte "NES", $1A, 2, 10, $41, 0, 0, 0, 0, 0, 0, 0, 0, 0   ; MMC3, 32K PRG, 80K CHR
 
 PPUCTRL = $2000
 PPUMASK = $2001
@@ -148,6 +148,14 @@ reset:
 : bit PPUSTAT
   bpl :-
 
+  lda #0
+  sta $8000
+  lda #0
+  sta $8001              ; R0 = sprite tiles 0-127
+  lda #1
+  sta $8000
+  lda #2
+  sta $8001              ; R1 = sprite tiles 128-255
   lda #$0F
   sta $4015
   lda #$C7
@@ -165,7 +173,7 @@ reset:
   jsr go_title
   lda #$1E
   sta mask
-  lda #$88
+  lda #$90
   sta ctrl
   lda PPUSTAT
   lda ctrl
@@ -347,7 +355,7 @@ put_digits:
   ldy #5
 : lda (ptr),y
   clc
-  adc #$30
+  adc #$D0
   sta PPUDATA
   dey
   bpl :-
@@ -462,6 +470,7 @@ nmi:
   tya
   pha
   inc nmi_cnt
+  jsr set_banks
   lda busy
   bne :+
   jsr ppu_update
@@ -472,6 +481,28 @@ nmi:
   tax
   pla
   rti
+
+set_banks:                 ; the tunnel mosaic is advanced by swapping CHR banks
+  ldx cycle
+  lda BANKSEL,x
+  ldy #2
+  sty $8000
+  sta $8001
+  clc
+  adc #1
+  ldy #3
+  sty $8000
+  sta $8001
+  clc
+  adc #1
+  ldy #4
+  sty $8000
+  sta $8001
+  ldy #5
+  sty $8000
+  lda #4
+  sta $8001              ; fixed font page
+  rts
 
 ppu_update:
   lda #0
@@ -497,7 +528,7 @@ ppu_update:
   ldx #5
 : lda digits,x
   clc
-  adc #$30
+  adc #$D0
   sta PPUDATA
   dex
   bpl :-
@@ -508,7 +539,7 @@ ppu_update:
   ldx #5
 : lda best,x
   clc
-  adc #$30
+  adc #$D0
   sta PPUDATA
   dex
   bpl :-
@@ -675,10 +706,7 @@ game_update:
   adc t0
   sta tick8
   bcc :+
-  dec cycle
-  bpl :+
-  lda #2
-  sta cycle
+  jsr step_state
 : ; input
   lda padn
   and #BTN_LEFT
@@ -813,6 +841,15 @@ game_update:
   jsr spawn
 @ret:
   rts
+
+step_state:
+  inc cycle
+  lda cycle
+  cmp #24
+  bcc :+
+  lda #0
+  sta cycle
+: rts
 
 inc_dist:
   ldx #0
@@ -1096,10 +1133,7 @@ tunnel_anim:               ; tunnel keeps flowing in title / game over screens
   adc t0
   sta tick8
   bcc @r
-  dec cycle
-  bpl @r
-  lda #2
-  sta cycle
+  jsr step_state
 @r:
   rts
 
@@ -1109,47 +1143,6 @@ update_pal:
   sta pal,x
   dex
   bpl :-
-  ; tunnel ring colours: rotate the three shades
-  lda theme
-  asl a
-  clc
-  adc theme              ; theme*3
-  sta t1
-  lda cycle
-  asl a
-  clc
-  adc cycle              ; cycle*3
-  sta t2
-  ldx #0
-@rot:
-  lda t2
-  clc
-  adc @idx,x
-  tay
-  lda ROT,y
-  clc
-  adc t1
-  tay
-  lda THEMES,y
-  sta pal+1,x
-  inx
-  cpx #3
-  bne @rot
-  ; glow ring (pal 2): warm shades, same rotation
-  ldx #0
-@rot2:
-  lda t2
-  stx t0
-  clc
-  adc t0
-  tay
-  lda ROT,y
-  tay
-  lda @glow,y
-  sta pal+9,x
-  inx
-  cpx #3
-  bne @rot2
   ; the light flickers
   lda frame
   lsr a
@@ -1199,8 +1192,6 @@ update_pal:
   lda #0
   sta sx
   rts
-@idx: .byte 0, 1, 2
-@glow: .byte $16, $26, $36
 @shk: .byte 0, 3, 0, 253
 @flick: .byte $20, $30
 
@@ -1772,8 +1763,27 @@ upd_noise:
 
 .include "../data.inc"
 
+.segment "STUB"
+stub:                      ; lives in the fixed last bank: set up MMC3 before anything else
+  sei
+  cld
+  ldx #$FF
+  txs
+  lda #6
+  sta $8000
+  lda #0
+  sta $8001              ; R6 = PRG bank 0 at $8000
+  lda #7
+  sta $8000
+  lda #1
+  sta $8001              ; R7 = PRG bank 1 at $A000
+  lda #0
+  sta $A000              ; vertical mirroring
+  sta $E000              ; IRQ off
+  jmp reset
+
 .segment "VECTORS"
-  .word nmi, reset, irq
+  .word nmi, stub, irq
 
 .segment "CHARS"
   .incbin "../chr.bin"
