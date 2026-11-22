@@ -43,9 +43,9 @@ for ch, cols in FONT.items():
     px = [[0]*8 for _ in range(8)]
     for cx, col in enumerate(cols):
         for y in range(7):
-            if col >> y & 1: px[y][cx + 1] = 1
+            if col >> y & 1: px[y][cx + 1] = 2
     font_page[ord(ch) - 0x20] = tile_bytes(px)
-font_page[0x40 - 0x20] = tile_bytes([[1]*8 for _ in range(8)])   # '@' slot = the light (solid white)
+font_page[0x40 - 0x20] = tile_bytes([[2]*8 for _ in range(8)])   # '@' slot = the light (solid white)
 LIGHT_TILE = 0x40 + FONT_OFF
 BLANK_TILE = 0x20 + FONT_OFF
 
@@ -58,132 +58,108 @@ def _h(a, b, c):
     h = ((h ^ (h >> 16)) * 2654435761) & 0xFFFFFFFF
     return ((h ^ (h >> 15)) & 0xFFFFFF) / float(1 << 24)
 def pal3(r): return 1 if r < 0.516 else (2 if r < 0.875 else 3)   # dark / mid / bright, as in the shader
-NRINGS, NPAT, STATES = 14, 13, 24
+NRINGS, NPAT, STATES = 14, 9, 24
 def ring_tile(a, b): return a * NPAT + b
 bg = None
 
-# Sprite tiles: shaded boxes, generated per depth stage.
-spr = [tile_bytes(blank)]
-spr_idx = {spr[0]: 0}
-def tile_id(px):
-    b = tile_bytes(px)
-    if b not in spr_idx:
-        spr_idx[b] = len(spr); spr.append(b)
-    return spr_idx[b]
-
+# ---------------------------------------------------------------- obstacles (background tiles)
+# Obstacles are part of the tunnel: blocks of grouted tiles drawn into the nametable at their
+# perspective position. Tiles are dark and sparse so they read as a darker mass.
 STAGES = 16
-def S(k): return 1.0 / (1.6 + 0.5 * k)
-LS, U = 75.0, 112.0
+def Zst(k): return 0.9 + 0.5 * k
+HS, VS = 128.0, 112.0
+LANES = [(-1 + l * 2 / 3.0, -1 + (l + 1) * 2 / 3.0) for l in range(3)]
+def camx(c2): return (c2 - 2) / 3.0
 KINDS = ['pit', 'pillar', 'wall', 'beam']
 
-def _hash(x, y):
-    h = (x * 374761393 + y * 668265263) & 0xFFFFFFFF
-    h = ((h ^ (h >> 13)) * 1274126177) & 0xFFFFFFFF
-    return ((h ^ (h >> 16)) & 255) / 256.0
+def obs_tile(cls, var):
+    cell = [4, 3, 2, 2][cls]
+    px = [[0]*8 for _ in range(8)]
+    for y in range(8):
+        for x in range(8):
+            if x % cell == cell - 1 or y % cell == cell - 1: continue          # grout
+            r = _h(var, (y // cell) * 8 + x // cell, 11 + cls)
+            if cls == 3: px[y][x] = 0                                          # pit: black hole
+            else: px[y][x] = 0 if r < 0.3 else 1                                # dark red tiles, some black
+    return tile_bytes(px)
+obs_page = [obs_tile(c, v) for c in range(4) for v in range(16)]
 
-# Obstacles are blocks of the same grouted tiles as the tunnel. The tile size follows
-# perspective (8px * scale), colours are the same random dark / mid / bright reds. A sprite tile has
-# two fills plus grout, so each 8x8 picks the pair of reds that covers it best.
-PAIRS = [(1, 2), (2, 3), (1, 3)]      # sprite palette 0: dark+mid, 1: mid+bright, 2: dark+bright
-def box_classes(w, h, kind, s):
-    cell = max(2, round(8 * s))
-    img = [[0]*w for _ in range(h)]
-    for y in range(h):
-        for x in range(w):
-            if x % cell == cell - 1 or y % cell == cell - 1: img[y][x] = 9       # grout
-            else: img[y][x] = 1 if kind == 'pit' else pal3(_h(x // cell, y // cell, 5))
-    return img
+def clampi(v, lo, hi): return max(lo, min(hi, v))
+def cols(x0, x1):
+    c0, c1 = int(round(x0 / 8.0)), int(round(x1 / 8.0))
+    if c1 <= c0: c1 = c0 + 1
+    return clampi(c0, 0, 32), clampi(c1, 0, 32)
+def rows(y0, y1):
+    r0, r1 = int(round(y0 / 8.0)), int(round(y1 / 8.0))
+    if r1 <= r0: r1 = r0 + 1
+    return clampi(r0, 2, 28), clampi(r1, 2, 28)
 
-def slice_tile(img, w, h, tx, ty):
-    cls = [[img[ty+y][tx+x] if (ty+y < h and tx+x < w) else None for x in range(8)] for y in range(8)]
-    counts = {1: 0, 2: 0, 3: 0}
-    for r in cls:
-        for v in r:
-            if v in counts: counts[v] += 1
-    best = max(range(3), key=lambda i: counts[PAIRS[i][0]] + counts[PAIRS[i][1]])
-    pair = PAIRS[best]
-    px = []
-    for r in cls:
-        row = []
-        for v in r:
-            if v is None: row.append(0)
-            elif v == 9: row.append(3)
-            else:
-                row.append(1 if abs(v - pair[0]) <= abs(v - pair[1]) else 2)
-        px.append(row)
-    return px, best
+def span_record(t, c2, lane, k):
+    z = Zst(k); cx = camx(c2)
+    X0, X1 = LANES[lane]
+    cls = 3 if t == 0 else (0 if k <= 2 else (1 if k <= 6 else 2))
+    if t == 0:       # pit: a strip of floor between z and z+0.5, narrowing with distance
+        z1 = z + 0.5
+        r_top = int(round((128 + VS / z1) / 8.0)); r_bot = int(round((128 + VS / z) / 8.0))
+        r_top, r_bot = clampi(r_top, 2, 28), clampi(r_bot + 1, 2, 28)
+        pairs = []
+        for r in range(r_top, r_bot):
+            y = r * 8 + 4
+            zz = clampi(VS / max(1.0, y - 128), z, z1)
+            pairs.append(cols(128 + (X0 - cx) * HS / zz, 128 + (X1 - cx) * HS / zz))
+        pairs = [pr for pr in pairs if pr[1] > pr[0]]
+        if not pairs: return [0x80 | cls, 2, 0]
+        return [0x80 | cls, r_top, len(pairs)] + [v for pr in pairs for v in pr]
+    ys = {1: (1.0, -1.0), 2: (-0.6, -1.0), 3: (1.0, -0.2)}[t]
+    r0, r1 = rows(128 - ys[0] * VS / z, 128 - ys[1] * VS / z)
+    c0, c1 = cols(128 + (X0 - cx) * HS / z, 128 + (X1 - cx) * HS / z)
+    if c1 <= c0 or r1 <= r0: return [cls, 2, 0, 0, 0]
+    return [cls, r0, r1 - r0, c0, c1]
 
-recs, recptr = [], {}
-for t, kind in enumerate(KINDS):
-    for k in range(STAGES):
-        s = S(k)
-        w = max(3, round({'pit':0.85,'pillar':0.7,'wall':0.85,'beam':0.85}[kind] * LS * s))
-        h = {'pit': max(2, round(0.12*U*s*1.6)), 'pillar': max(4, round(0.9*U*s)),
-             'wall': max(3, round(0.4*U*s)), 'beam': max(3, round(0.7*U*s))}[kind]
-        top = -224*s if kind == 'beam' else -h
-        top = round(top)
-        img = box_classes(w, h, kind, s)
-        tiles = []
-        for ty in range(0, h, 8):
-            for tx in range(0, w, 8):
-                px, pa = slice_tile(img, w, h, tx, ty)
-                tiles.append((tx - w//2, top + ty, tile_id(px), pa))
-        recptr[(t, k)] = len(recs)
-        recs.append((t, k, tiles))
-if len(spr) > 256: sys.exit(f'too many sprite tiles: {len(spr)}')
-maxspr = max(len(r[2]) for r in recs)
-print(f'sprite tiles {len(spr)}, max sprites per obstacle {maxspr}', file=sys.stderr)
-
-sprite_page = spr + [tile_bytes(blank)] * (256 - len(spr))        # 4KB: units 0-3
-chunks = [b''.join(sprite_page)]
-chunks.append(b''.join(font_page))                                  # unit 4
+# CHR layout (1KB units): 0-3 sprites (unused), 4 font, 5 obstacle tiles, then 2 units per ring state.
+chunks = [bytes(4096)]
+chunks.append(b''.join(font_page))
+chunks.append(b''.join(obs_page))
 for st in range(STATES):
     tiles_ = []
     for a_ in range(NRINGS):
         d_ = a_ + 2
         for b_ in range(NPAT):
-            # tile size on screen shrinks progressively toward the light: a ring at tile radius d
-            # shows cells of about 0.28*d px; the fractional part is spread over the ring's patterns
-            f = 0.25 * d_ + 0.1
+            f = 0.25 * d_ + 0.1                       # tile size shrinks progressively toward the light
             cell = int(f) + (1 if (b_ + 0.5) / NPAT < f - int(f) else 0)
             cell = max(2, min(4, cell))
             k_ = (a_ - st) % 24
             px = [[0]*8 for _ in range(8)]
             for y in range(8):
                 for x in range(8):
-                    if cell > 1 and (x % cell == cell - 1 or y % cell == cell - 1): continue
+                    if x % cell == cell - 1 or y % cell == cell - 1: continue
                     px[y][x] = pal3(_h(k_, b_ * 64 + (y // cell) * 8 + (x // cell), 1))
             tiles_.append(tile_bytes(px))
-    tiles_ += [tile_bytes(blank)] * (192 - len(tiles_))
-    chunks.append(b''.join(tiles_))                                 # three 1KB units per state
+    tiles_ += [tile_bytes(blank)] * (128 - len(tiles_))
+    chunks.append(b''.join(tiles_))
 chr_data = b''.join(chunks)
-chr_data += bytes(10 * 8192 - len(chr_data))
+chr_data += bytes(7 * 8192 - len(chr_data))
 open('chr.bin', 'wb').write(chr_data)
 print(f'chr {len(chr_data)//1024}KB', file=sys.stderr)
 
 # ---------------------------------------------------------------- tables
 emit('; generated by tools_assets.py -- do not edit')
 emit('.segment "RODATA"')
-for t, kind in enumerate(KINDS):
-    for k in range(STAGES):
-        pass
-emit('REC_LO:'); bytes_([0]*0)  # placeholder to keep labels ordered
-out.pop(); out.pop()
-emit('REC_LO:'); emit('  .lobytes ' + ','.join(f'rec_{t}_{k}' for t in range(4) for k in range(STAGES)))
-emit('REC_HI:'); emit('  .hibytes ' + ','.join(f'rec_{t}_{k}' for t in range(4) for k in range(STAGES)))
-for t, k, tiles in recs:
-    label(f'rec_{t}_{k}')
-    bytes_([len(tiles)] + [v for (dx, dy, ti, pa) in tiles for v in (dx, dy, ti, pa)], 16)
-
-label('FLOORY'); bytes_([round(128 + U*S(k)) for k in range(STAGES)])
-label('YOFF')
-for k in range(STAGES):
-    bytes_([round((c-6) * 7.84 * S(k)) for c in range(16)])
-label('LANEOFF')
-for k in range(STAGES):
-    bytes_([round((i-8)/4.0 * LS * S(k)) for i in range(17)], 17)
-emit('LANE_LO:'); emit('  .lobytes ' + ','.join(f'LANEOFF+{k*17}' for k in range(STAGES)))
-emit('LANE_HI:'); emit('  .hibytes ' + ','.join(f'LANEOFF+{k*17}' for k in range(STAGES)))
+blobs, blob_idx, ptrs = [], {}, []
+for t in range(4):
+    for c2 in range(5):
+        for lane in range(3):
+            for k in range(STAGES):
+                rec = tuple(span_record(t, c2, lane, k))
+                if rec not in blob_idx:
+                    blob_idx[rec] = len(blobs); blobs.append(rec)
+                ptrs.append(blob_idx[rec])
+emit('SPAN_LO:'); emit('  .lobytes ' + ','.join(f'sp{i}' for i in ptrs))
+emit('SPAN_HI:'); emit('  .hibytes ' + ','.join(f'sp{i}' for i in ptrs))
+for i, rec in enumerate(blobs):
+    label(f'sp{i}'); bytes_(list(rec), 16)
+print(f'span records {len(blobs)} unique, {sum(len(r) for r in blobs)} bytes', file=sys.stderr)
+label('OBS_HASH'); bytes_([int(_h(i, 3, 9) * 16) % 16 for i in range(64)])
 label('JUMPH')
 bytes_([round(8 * 4 * t * (28 - t) / 28.0**2) for t in range(29)])
 
@@ -192,9 +168,9 @@ label('THEMES')   # 3 shades dark -> light, per theme
 THEMES = [(0x06,0x16,0x26),(0x06,0x16,0x26),(0x06,0x16,0x26),(0x05,0x15,0x25),(0x07,0x17,0x27),(0x06,0x16,0x26)]  # reds, like the original
 bytes_([c for t in THEMES for c in t], 3)
 label('INIT_PAL')
-bytes_([0x0F,0x06,0x16,0x26,  0x0F,0x05,0x06,0x16,  0x0F,0x16,0x26,0x36,  0x0F,0x30,0x2C,0x00,
+bytes_([0x0F,0x06,0x16,0x26,  0x0F,0x05,0x06,0x16,  0x0F,0x16,0x26,0x36,  0x0F,0x06,0x30,0x30,
         0x0F,0x06,0x16,0x0F,  0x0F,0x16,0x26,0x0F,  0x0F,0x06,0x26,0x0F,  0x0F,0x06,0x16,0x0F], 4)
-label('BANKSEL'); bytes_([5 + 3*st for st in range(STATES)], 12)
+label('BANKSEL'); bytes_([6 + 2*st for st in range(STATES)], 12)
 
 # ---------------------------------------------------------------- nametables
 def nametable(hud_digits_row=True):

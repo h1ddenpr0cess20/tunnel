@@ -2,7 +2,7 @@
 ; Pseudo-3D tunnel run: three lanes, jump pits and walls, slide under beams, dodge pillars.
 
 .segment "HEADER"
-  .byte "NES", $1A, 2, 10, $41, 0, 0, 0, 0, 0, 0, 0, 0, 0   ; MMC3, 32K PRG, 80K CHR
+  .byte "NES", $1A, 2, 7, $41, 0, 0, 0, 0, 0, 0, 0, 0, 0   ; MMC3, 32K PRG, 56K CHR
 
 PPUCTRL = $2000
 PPUMASK = $2001
@@ -77,6 +77,42 @@ wh_i: .res 1
 wh_t: .res 1
 frame: .res 1
 slot: .res 1
+tmpc: .res 1
+q_wr: .res 1
+q_rd: .res 1
+hud_dirty: .res 1
+wh_dirty: .res 1
+o_ds: .res 3           ; drawn stage ($FF = nothing drawn)
+o_dc: .res 3           ; drawn camera position
+o_dty: .res 3          ; drawn type / lane (an obstacle may be gone before it is erased)
+o_dla: .res 3
+o_prog: .res 3         ; row to resume a partly sent redraw at
+gtype: .res 1
+gcam: .res 1
+glane: .res 1
+gstage: .res 1
+sr0: .res 2
+sn: .res 2
+scls: .res 1
+slst: .res 2
+sdl: .res 2
+sdh: .res 2
+scl2: .res 1
+rr: .res 1
+rmin: .res 1
+rmax: .res 1
+havo: .res 1
+havn: .res 1
+c0o: .res 1
+c1o: .res 1
+c0n: .res 1
+c1n: .res 1
+u0: .res 1
+u1: .res 1
+hsh: .res 1
+tbase: .res 1
+spc0: .res 1
+spc1: .res 1
 tyv: .res 1
 np: .res 2
 nt0: .res 1
@@ -112,8 +148,12 @@ sn_first: .res 1
 .segment "OAM"
 oam: .res 256
 
+.segment "QUEUE"
+qbuf: .res 256
+
 .segment "BSS"
 pal: .res 32
+rowbuf: .res 32
 
 .segment "CODE"
 
@@ -156,6 +196,10 @@ reset:
   sta $8000
   lda #2
   sta $8001              ; R1 = sprite tiles 128-255
+  lda #0
+  sta OAMADDR
+  lda #>oam
+  sta OAMDMA             ; sprites stay hidden: obstacles are background tiles
   lda #$0F
   sta $4015
   lda #$C7
@@ -227,14 +271,14 @@ st_run:
   jsr update_pal
   jmp main
 : jsr game_update
-  jsr build_sprites
+  jsr draw_obstacles
   jsr tunnel_anim
   jsr update_pal
   jmp main
 
 st_dying:
   jsr dying_update
-  jsr build_sprites
+  jsr draw_obstacles
   jsr tunnel_anim
   jsr update_pal
   jmp main
@@ -487,28 +531,23 @@ set_banks:                 ; the tunnel mosaic is advanced by swapping CHR banks
   lda BANKSEL,x
   ldy #2
   sty $8000
-  sta $8001
+  sta $8001              ; R2: ring tiles 0-63
   clc
   adc #1
   ldy #3
   sty $8000
-  sta $8001
-  clc
-  adc #1
+  sta $8001              ; R3: ring tiles 64-127
   ldy #4
   sty $8000
-  sta $8001
+  lda #5
+  sta $8001              ; R4: obstacle tiles
   ldy #5
   sty $8000
   lda #4
-  sta $8001              ; fixed font page
+  sta $8001              ; R5: font
   rts
 
 ppu_update:
-  lda #0
-  sta OAMADDR
-  lda #>oam
-  sta OAMDMA
   lda PPUSTAT
   lda #$3F
   sta PPUADDR
@@ -518,9 +557,12 @@ ppu_update:
 : lda pal,x
   sta PPUDATA
   inx
-  cpx #32
+  cpx #16                ; background palettes only: there are no sprites
   bne :-
-  ; HUD digits on nametable 1
+  lda hud_dirty
+  beq @nohud
+  lda #0
+  sta hud_dirty
   lda #$24
   sta PPUADDR
   lda #$26
@@ -543,7 +585,11 @@ ppu_update:
   sta PPUDATA
   dex
   bpl :-
-  ; status line (row 28)
+@nohud:
+  lda wh_dirty
+  beq @nowh
+  lda #0
+  sta wh_dirty
   lda #$27
   sta PPUADDR
   lda #$84
@@ -576,6 +622,40 @@ ppu_update:
   iny
   cpy #24
   bne :-
+@nowh:
+  ; drain the tile queue: runs of (addr hi, addr lo, length, tiles...)
+  lda #64
+  sta nt0
+@q:
+  lda q_rd
+  cmp q_wr
+  beq @qdone
+  tax
+  lda qbuf,x
+  sta PPUADDR
+  inx
+  lda qbuf,x
+  sta PPUADDR
+  inx
+  lda qbuf,x
+  inx
+  tay
+  sty nt1
+: lda qbuf,x
+  sta PPUDATA
+  inx
+  dey
+  bne :-
+  stx q_rd
+  lda nt0
+  sec
+  sbc nt1
+  bcc @qdone
+  sbc #3
+  bcc @qdone
+  sta nt0
+  jmp @q
+@qdone:
   lda PPUSTAT
   lda sx
   sta PPUSCRL
@@ -599,7 +679,7 @@ go_title:
   sta flash
   sta jt
   sta slt
-  lda #4
+  lda #2
   sta cam
   lda #6
   sta cyy
@@ -635,7 +715,7 @@ start_game:
   bpl :-
   lda #1
   sta lane
-  lda #4
+  lda #2
   sta cam
   lda #6
   sta cyy
@@ -645,6 +725,19 @@ start_game:
   sta spn_l
   lda #$30
   sta spn_h
+  ldx #2
+  lda #$FF
+: sta o_ds,x
+  dex
+  bpl :-
+  lda #0
+  sta o_prog
+  sta o_prog+1
+  sta o_prog+2
+  jsr reload_nt1
+  lda #1
+  sta hud_dirty
+  sta wh_dirty
   lda ctrl
   ora #1
   sta ctrl
@@ -658,10 +751,34 @@ start_game:
   jsr sfx_play
   rts
 
+reload_nt1:                ; forget any obstacle tiles left in the play nametable
+  lda #1
+  sta busy
+  lda #0
+  sta PPUMASK
+  lda PPUSTAT
+  lda #$24
+  sta PPUADDR
+  lda #$00
+  sta PPUADDR
+  lda #<NT1
+  sta ptr
+  lda #>NT1
+  sta ptr+1
+  jsr copy_nt
+  lda #0
+  sta q_rd
+  sta q_wr
+  sta busy
+  rts
+
 toggle_pause:
   lda paused
   eor #1
   sta paused
+  lda #1
+  sta wh_dirty
+  lda paused
   beq @unp
   lda #0
   sta mus_on
@@ -778,7 +895,6 @@ game_update:
   bne @camdone
   lda lane
   asl a
-  asl a
   cmp cam
   beq @camdone
   bcc @camdn
@@ -799,6 +915,9 @@ game_update:
   lda wh_t
   beq :+
   dec wh_t
+  bne :+
+  lda #1
+  sta wh_dirty
 : ; obstacles
   ldx #2
 @ob:
@@ -852,6 +971,8 @@ step_state:
 : rts
 
 inc_dist:
+  lda #1
+  sta hud_dirty
   ldx #0
 : inc digits,x
   lda digits,x
@@ -874,6 +995,8 @@ inc_dist:
   sta wh_i
   lda #200
   sta wh_t
+  lda #1
+  sta wh_dirty
 : rts
 
 ; spawn an obstacle (and sometimes a second one in another lane)
@@ -961,6 +1084,9 @@ add_obstacle:
   lda #0
   sta o_dl,x
   sta o_chk,x
+  sta o_prog,x
+  lda #$FF
+  sta o_ds,x
   lda #63
   sta o_dh,x
   rts
@@ -1150,7 +1276,7 @@ update_pal:
   and #1
   tax
   lda @flick,x
-  sta pal+13
+  sta pal+14
   ; apply flash / fade
   lda #$0F
   sta pal
@@ -1206,139 +1332,437 @@ clear_sprites:
   bne :-
   rts
 
-build_sprites:
+; ------------------------------------------------------------------ obstacles in the nametable
+; Obstacles are tunnel geometry: blocks of tiles drawn into the play nametable at their perspective
+; position and streamed to the PPU through a queue. Footprints are precomputed per
+; (type, camera, lane, depth stage) -- see tools_assets.py.
+draw_obstacles:
   lda #0
-  sta oi
   sta slot
 @loop:
   ldx slot
-  lda o_type,x
-  beq :+
-  jsr draw_obstacle
-: inc slot
+  jsr update_slot
+  inc slot
   lda slot
   cmp #3
   bne @loop
-  ; hide the rest
-  ldx oi
-  lda #$F0
-: sta oam,x
-  inx
-  inx
-  inx
-  inx
-  bne :-
   rts
 
 ; X = slot
-draw_obstacle:
+update_slot:
+  stx t3
+  lda o_type,x
+  beq @gone
   lda o_dh,x
   lsr a
   lsr a
   sta stg
+  cmp o_ds,x
+  bne @redraw
+  lda cam
+  cmp o_dc,x
+  bne @redraw
+  rts
+@gone:
+  lda o_ds,x
+  cmp #$FF
+  bne @redraw
+  rts
+@redraw:
+  lda o_dty,x            ; set 0 = what is on screen now
+  sta gtype
+  lda o_dla,x
+  sta glane
+  lda o_dc,x
+  sta gcam
+  lda o_ds,x
+  sta gstage
+  ldx #0
+  jsr load_set
+  ldx t3                 ; set 1 = what should be there
   lda o_type,x
+  beq @none
   sec
   sbc #1
-  sta t2                 ; also the sprite palette
-  asl a
-  asl a
-  asl a
-  asl a
-  ora stg
-  tay
-  lda REC_LO,y
-  sta ptr
-  lda REC_HI,y
-  sta ptr+1
-  ldy stg
-  lda FLOORY,y
-  sta by
-  tya
-  asl a
-  asl a
-  asl a
-  asl a
-  ora cyy
-  tay
-  lda YOFF,y
-  clc
-  adc by
-  sta by
-  ldy stg
-  lda LANE_LO,y
-  sta ptr2
-  lda LANE_HI,y
-  sta ptr2+1
+  sta gtype
   lda o_lane,x
-  asl a
-  asl a
-  sec
-  sbc cam
+  sta glane
+  lda cam
+  sta gcam
+  lda stg
+  sta gstage
+  jmp @ld1
+@none:
+  lda #$FF
+  sta gstage
+@ld1:
+  ldx #1
+  jsr load_set
+  lda #255               ; the rows to touch
+  sta rmin
+  lda #0
+  sta rmax
+  ldx #1
+@mm:
+  lda sn,x
+  beq @mnext
+  lda sr0,x
+  cmp rmin
+  bcs :+
+  sta rmin
+: lda sr0,x
   clc
-  adc #8
-  tay
-  lda (ptr2),y
+  adc sn,x
+  cmp rmax
+  bcc @mnext
+  sta rmax
+@mnext:
+  dex
+  bpl @mm
+  lda rmin
+  cmp rmax
+  bcs @finish
+  ldx t3
+  lda o_prog,x
+  cmp rmin
+  bcs :+
+  lda rmin
+: sta rr
+  lda scls
+  asl a
+  asl a
+  asl a
+  asl a
   clc
   adc #128
-  sta bx
-  ldy #0
-  lda (ptr),y
-  sta cnt
-  iny
-@tile:
-  lda (ptr),y            ; dx
-  iny
-  clc
-  adc bx
-  sta t0
-  lda (ptr),y            ; dy
-  iny
-  sta dyv
-  lda dyv
-  bmi @neg
-  clc
-  adc by
-  bcs @skip
-  cmp #239
-  bcs @skip
-  bcc @put
-@neg:
-  clc
-  adc by
-  bcc @skip
-@put:
-  sta t1
-  lda (ptr),y            ; tile
-  iny
-  sta t3
-  lda (ptr),y            ; palette
-  iny
-  sta t2
-  sty tyv
-  ldx oi
-  lda t3
-  sta oam+1,x
-  lda t1
+  sta tbase
+@row:
+  lda rr
+  cmp rmax
+  bcs @finish
+  jsr do_row
+  bcs @defer
+  inc rr
+  jmp @row
+@defer:                  ; queue full: carry on next frame
+  ldx t3
+  lda rr
+  sta o_prog,x
+  rts
+@finish:
+  ldx t3
+  lda #0
+  sta o_prog,x
+  lda o_type,x
+  bne @keep
+  lda #$FF
+  sta o_ds,x
+  rts
+@keep:
   sec
   sbc #1
-  sta oam,x
-  lda t2
-  sta oam+2,x
+  sta o_dty,x
+  lda o_lane,x
+  sta o_dla,x
+  lda cam
+  sta o_dc,x
+  lda stg
+  sta o_ds,x
+  rts
+
+; X = set (0 old / 1 new); uses gtype gcam glane gstage
+load_set:
+  lda gstage
+  cmp #$FF
+  bne :+
+  lda #0
+  sta sn,x
+  sta sr0,x
+  rts
+: stx t2
+  lda gtype
+  asl a
+  asl a
+  clc
+  adc gtype              ; type * 5
+  clc
+  adc gcam
+  sta t0
+  asl a
+  clc
+  adc t0                 ; * 3
+  clc
+  adc glane
+  sta t0                 ; v = (type*5+cam)*3+lane, 0..59
+  lsr a
+  lsr a
+  lsr a
+  lsr a
+  sta t1                 ; high byte of v*16
   lda t0
-  sta oam+3,x
-  inx
-  inx
-  inx
-  inx
-  stx oi
-  ldy tyv
-  bne @fix               ; Y is never 0 here
-@skip:
+  asl a
+  asl a
+  asl a
+  asl a
+  ora gstage
+  sta t0                 ; low byte of v*16+stage
+  lda #<SPAN_LO
+  clc
+  adc t0
+  sta ptr
+  lda #>SPAN_LO
+  adc t1
+  sta ptr+1
+  ldy #0
+  lda (ptr),y
+  pha
+  lda #<SPAN_HI
+  clc
+  adc t0
+  sta ptr
+  lda #>SPAN_HI
+  adc t1
+  sta ptr+1
+  lda (ptr),y
+  sta ptr+1
+  pla
+  sta ptr                ; ptr -> footprint record
+  ldx t2
+  lda (ptr),y
+  pha
+  and #$7F
+  sta scl2
+  pla
+  and #$80
+  sta slst,x
   iny
+  lda (ptr),y
+  sta sr0,x
   iny
-@fix:
-  dec cnt
-  bne @tile
+  lda (ptr),y
+  sta sn,x
+  lda ptr
+  clc
+  adc #3
+  sta sdl,x
+  lda ptr+1
+  adc #0
+  sta sdh,x
+  cpx #1
+  bne :+
+  lda scl2
+  sta scls
+: rts
+
+; rr = row, X = set: carry set if the row is not covered, else spc0/spc1 = first/last+1 column
+span_at:
+  lda rr
+  sec
+  sbc sr0,x
+  bcc @empty
+  cmp sn,x
+  bcs @empty
+  sta t2
+  lda sdl,x
+  sta ptr2
+  lda sdh,x
+  sta ptr2+1
+  lda slst,x
+  beq @rect
+  lda t2
+  asl a
+  tay
+  jmp @get
+@rect:
+  ldy #0
+@get:
+  lda (ptr2),y
+  sta spc0
+  iny
+  lda (ptr2),y
+  sta spc1
+  clc
+  rts
+@empty:
+  sec
+  rts
+
+; Redraws row rr: tiles under the new footprint become obstacle, tiles that only the old
+; footprint covered are restored from the stock nametable. Carry set = queue full.
+do_row:
+  lda #0
+  sta havo
+  sta havn
+  ldx #0
+  jsr span_at
+  bcs @n
+  lda spc0
+  sta c0o
+  lda spc1
+  sta c1o
+  lda #1
+  sta havo
+@n:
+  ldx #1
+  jsr span_at
+  bcs @u
+  lda spc0
+  sta c0n
+  lda spc1
+  sta c1n
+  lda #1
+  sta havn
+@u:
+  lda havo
+  ora havn
+  bne :+
+  clc
+  rts
+: lda havo
+  beq @unew
+  lda havn
+  beq @uold
+  lda c0o
+  cmp c0n
+  bcc :+
+  lda c0n
+: sta u0
+  lda c1o
+  cmp c1n
+  bcs :+
+  lda c1n
+: sta u1
+  jmp @build
+@uold:
+  lda c0o
+  sta u0
+  lda c1o
+  sta u1
+  jmp @build
+@unew:
+  lda c0n
+  sta u0
+  lda c1n
+  sta u1
+@build:
+  lda rr                 ; ptr = stock nametable row
+  lsr a
+  lsr a
+  lsr a
+  sta t0
+  lda rr
+  asl a
+  asl a
+  asl a
+  asl a
+  asl a
+  clc
+  adc #<NT1
+  sta ptr
+  lda t0
+  adc #>NT1
+  sta ptr+1
+  lda rr                 ; hash start = (rr*7 + u0*5) & 63
+  asl a
+  asl a
+  asl a
+  sec
+  sbc rr
+  sta t0
+  lda u0
+  asl a
+  asl a
+  clc
+  adc u0
+  clc
+  adc t0
+  and #63
+  sta hsh
+  ldy u0
+  ldx #0
+@col:
+  lda havn
+  beq @base
+  cpy c0n
+  bcc @base
+  cpy c1n
+  bcs @base
+  stx tmpc
+  ldx hsh
+  lda OBS_HASH,x
+  clc
+  adc tbase
+  ldx tmpc
+  jmp @put
+@base:
+  lda (ptr),y
+@put:
+  sta rowbuf,x
+  inx
+  lda hsh
+  clc
+  adc #5
+  and #63
+  sta hsh
+  iny
+  cpy u1
+  bne @col
+  stx t2                 ; run length
+  lda q_rd               ; room in the queue?
+  sec
+  sbc q_wr
+  sec
+  sbc #1
+  sta t0
+  lda t2
+  clc
+  adc #3
+  cmp t0
+  beq :+
+  bcs @full
+: lda rr                 ; PPU address = $2400 + rr*32 + u0
+  asl a
+  asl a
+  asl a
+  asl a
+  asl a
+  clc
+  adc u0
+  sta t0
+  lda #0
+  adc #0
+  sta tmpc
+  lda rr
+  lsr a
+  lsr a
+  lsr a
+  clc
+  adc tmpc
+  clc
+  adc #$24
+  sta t1
+  ldx q_wr
+  lda t1
+  sta qbuf,x
+  inx
+  lda t0
+  sta qbuf,x
+  inx
+  lda t2
+  sta qbuf,x
+  inx
+  ldy #0
+: lda rowbuf,y
+  sta qbuf,x
+  inx
+  iny
+  cpy t2
+  bne :-
+  stx q_wr
+  clc
+  rts
+@full:
+  sec
   rts
 
 ; ------------------------------------------------------------------ sound
