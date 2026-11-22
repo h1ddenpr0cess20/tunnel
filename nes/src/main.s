@@ -1150,7 +1150,7 @@ update_pal:
   and #1
   tax
   lda @flick,x
-  sta pal+5
+  sta pal+13
   ; apply flash / fade
   lda #$0F
   sta pal

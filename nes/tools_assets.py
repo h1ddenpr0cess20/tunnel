@@ -140,8 +140,20 @@ chunks.append(b''.join(font_page))                                  # unit 4
 for st in range(STATES):
     tiles_ = []
     for a_ in range(NRINGS):
+        d_ = a_ + 2
         for b_ in range(NPAT):
-            tiles_.append(solid_grid(pal3(_h((a_ - st) % 24, b_, 1))))
+            # tile size on screen shrinks progressively toward the light: a ring at tile radius d
+            # shows cells of about 0.28*d px; the fractional part is spread over the ring's patterns
+            f = 0.25 * d_ + 0.1
+            cell = int(f) + (1 if (b_ + 0.5) / NPAT < f - int(f) else 0)
+            cell = max(2, min(4, cell))
+            k_ = (a_ - st) % 24
+            px = [[0]*8 for _ in range(8)]
+            for y in range(8):
+                for x in range(8):
+                    if cell > 1 and (x % cell == cell - 1 or y % cell == cell - 1): continue
+                    px[y][x] = pal3(_h(k_, b_ * 64 + (y // cell) * 8 + (x // cell), 1))
+            tiles_.append(tile_bytes(px))
     tiles_ += [tile_bytes(blank)] * (192 - len(tiles_))
     chunks.append(b''.join(tiles_))                                 # three 1KB units per state
 chr_data = b''.join(chunks)
@@ -180,7 +192,7 @@ label('THEMES')   # 3 shades dark -> light, per theme
 THEMES = [(0x06,0x16,0x26),(0x06,0x16,0x26),(0x06,0x16,0x26),(0x05,0x15,0x25),(0x07,0x17,0x27),(0x06,0x16,0x26)]  # reds, like the original
 bytes_([c for t in THEMES for c in t], 3)
 label('INIT_PAL')
-bytes_([0x0F,0x06,0x16,0x26,  0x0F,0x30,0x38,0x28,  0x0F,0x16,0x26,0x36,  0x0F,0x30,0x2C,0x00,
+bytes_([0x0F,0x06,0x16,0x26,  0x0F,0x05,0x06,0x16,  0x0F,0x16,0x26,0x36,  0x0F,0x30,0x2C,0x00,
         0x0F,0x06,0x16,0x0F,  0x0F,0x16,0x26,0x0F,  0x0F,0x06,0x26,0x0F,  0x0F,0x06,0x16,0x0F], 4)
 label('BANKSEL'); bytes_([5 + 3*st for st in range(STATES)], 12)
 
@@ -200,9 +212,17 @@ def nametable(hud_digits_row=True):
                 else:       side, j = (2 if r <= 15 else 3), c
                 b_ = int(_h(side, j, 3) * NPAT) % NPAT
                 tiles[r][c] = ring_tile(d - 2, b_)
-    for br in range(6, 10):
-        for bc in range(6, 10):
-            attr_blocks[br][bc] = 1 if (7 <= br <= 8 and 7 <= bc <= 8) else 2
+    for br in range(1, 15):
+        for bc in range(16):
+            # block centre in tile units
+            rr = [br * 2, br * 2 + 1]; cc = [bc * 2, bc * 2 + 1]
+            dxs = [15 - c if c <= 15 else c - 16 for c in cc]; dys = [15 - r_ if r_ <= 15 else r_ - 16 for r_ in rr]
+            dx, dy, r = min(dxs), min(dys), rr[0]
+            d = max(dx, dy)
+            if d <= 1: attr_blocks[br][bc] = 3          # the light: white from the text palette
+            elif d <= 3: attr_blocks[br][bc] = 2        # glow around it
+            elif d <= 6: attr_blocks[br][bc] = 1        # fog: far rings are a little darker
+            elif dy > dx and r <= 15: attr_blocks[br][bc] = 1   # ceiling is darker
     for bc in range(16): attr_blocks[0][bc] = 3
     return tiles, attr_blocks
 
