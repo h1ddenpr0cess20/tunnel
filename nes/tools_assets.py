@@ -65,20 +65,16 @@ def _hash(x, y):
     h = ((h ^ (h >> 13)) * 1274126177) & 0xFFFFFFFF
     return ((h ^ (h >> 16)) & 255) / 256.0
 
-# Obstacles are made of the same grouted tiles as the tunnel, just darker.
-# Colour 1/2 are two dark fills, colour 3 is the black grout. Tile size shrinks with distance.
+# Obstacles are blocks of the same 8x8 grouted tiles as the tunnel, in the same three reds.
+# A sprite has only three colours, so each 8x8 tile is one fill (colour 1) plus black grout (colour 3),
+# and the sprite palette (dark / mid / bright red) is picked per tile with the tunnel's own odds.
 def box_pixels(w, h, kind, s):
-    cell = 4 if s >= 0.35 else (3 if s >= 0.2 else 2)
-    img = [[1]*w for _ in range(h)]
-    for y in range(h):
-        for x in range(w):
-            cx, cy = x // cell, y // cell
-            if x % cell == cell - 1 or y % cell == cell - 1:
-                img[y][x] = 3
-            else:
-                lim = 0.25 if kind == 'pit' else 0.45
-                img[y][x] = 2 if _hash(cx & 3, cy & 3) < lim else 1
-    return img
+    return [[3 if (x % 8 == 7 or y % 8 == 7) else 1 for x in range(w)] for y in range(h)]
+
+def tile_pal(cx, cy, kind):
+    if kind == 'pit': return 0
+    r = _hash(cx * 7 + 3, cy * 5 + 1)
+    return 0 if r < 0.516 else (1 if r < 0.875 else 2)
 
 recs, recptr = [], {}
 for t, kind in enumerate(KINDS):
@@ -95,7 +91,7 @@ for t, kind in enumerate(KINDS):
             for tx in range(0, w, 8):
                 px = [[(img[ty+y][tx+x] if ty+y < h and tx+x < w else 0) for x in range(8)] for y in range(8)]
                 if any(any(r) for r in px):
-                    tiles.append((tx - w//2, top + ty, tile_id(px)))
+                    tiles.append((tx - w//2, top + ty, tile_id(px), tile_pal(tx//8, ty//8, kind)))
         recptr[(t, k)] = len(recs)
         recs.append((t, k, tiles))
 if len(spr) > 256: sys.exit(f'too many sprite tiles: {len(spr)}')
@@ -117,7 +113,7 @@ emit('REC_LO:'); emit('  .lobytes ' + ','.join(f'rec_{t}_{k}' for t in range(4) 
 emit('REC_HI:'); emit('  .hibytes ' + ','.join(f'rec_{t}_{k}' for t in range(4) for k in range(STAGES)))
 for t, k, tiles in recs:
     label(f'rec_{t}_{k}')
-    bytes_([len(tiles)] + [v for (dx, dy, ti) in tiles for v in (dx, dy, ti)], 15)
+    bytes_([len(tiles)] + [v for (dx, dy, ti, pa) in tiles for v in (dx, dy, ti, pa)], 16)
 
 label('FLOORY'); bytes_([round(128 + U*S(k)) for k in range(STAGES)])
 label('YOFF')
@@ -137,7 +133,7 @@ THEMES = [(0x06,0x16,0x26),(0x06,0x16,0x26),(0x06,0x16,0x26),(0x05,0x15,0x25),(0
 bytes_([c for t in THEMES for c in t], 3)
 label('INIT_PAL')
 bytes_([0x0F,0x06,0x16,0x26,  0x0F,0x30,0x38,0x28,  0x0F,0x16,0x26,0x36,  0x0F,0x30,0x2C,0x00,
-        0x0F,0x0F,0x05,0x0F,  0x0F,0x05,0x06,0x0F,  0x0F,0x05,0x06,0x0F,  0x0F,0x05,0x06,0x0F], 4)
+        0x0F,0x06,0x06,0x0F,  0x0F,0x16,0x16,0x0F,  0x0F,0x26,0x26,0x0F,  0x0F,0x06,0x06,0x0F], 4)
 label('ROT'); bytes_([0,1,2, 1,2,0, 2,0,1], 3)
 
 # ---------------------------------------------------------------- nametables

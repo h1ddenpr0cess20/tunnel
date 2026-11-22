@@ -1319,8 +1319,13 @@ draw_obstacle:
   sta t1
   lda (ptr),y            ; tile
   iny
+  sta t3
+  lda (ptr),y            ; palette
+  iny
+  sta t2
   sty tyv
   ldx oi
+  lda t3
   sta oam+1,x
   lda t1
   sec
@@ -1338,6 +1343,7 @@ draw_obstacle:
   ldy tyv
   bne @fix               ; Y is never 0 here
 @skip:
+  iny
   iny
 @fix:
   dec cnt
