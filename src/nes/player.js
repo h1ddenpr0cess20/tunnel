@@ -60,6 +60,7 @@ async function loadRom(source) {
   const u8 = new Uint8Array(bytes);
   for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
   nes.loadROM(s);
+  nes.ppu.clipToTvSize = false;   // show the full 256x240 picture (jsnes hides the outer 8px like a TV)
 }
 
 function begin() {

@@ -5,7 +5,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const out = process.argv[2], seed = +process.argv[3] || 1, maxF = +process.argv[4] || 1500;
 fs.mkdirSync(out, { recursive: true });
 let fb; const nes = new NES({ onFrame(b) { fb = b.slice(); }, onAudioSample() {} });
-nes.loadROM(fs.readFileSync(path.join(here, '../tunnel.nes'), 'binary'));
+nes.loadROM(fs.readFileSync(path.join(here, '../tunnel.nes'), 'binary')); nes.ppu.clipToTvSize = false;
 const L = {}; for (const l of fs.readFileSync(path.join(here, '../tunnel.lbl'), 'utf8').split('\n')) { const m = l.match(/al ([0-9A-F]+) \.(\w+)/); if (m) L[m[2]] = parseInt(m[1], 16); }
 const M = nes.cpu.mem, g = n => M[L[n]];
 let rs = seed * 7919; const rnd = () => (rs = (rs * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;

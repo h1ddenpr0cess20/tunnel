@@ -2,7 +2,7 @@
 ; Pseudo-3D tunnel run: three lanes, jump pits and walls, slide under beams, dodge pillars.
 
 .segment "HEADER"
-  .byte "NES", $1A, 2, 7, $41, 0, 0, 0, 0, 0, 0, 0, 0, 0   ; MMC3, 32K PRG, 56K CHR
+  .byte "NES", $1A, 2, 29, $41, 0, 0, 0, 0, 0, 0, 0, 0, 0   ; MMC3, 32K PRG, 232K CHR
 
 PPUCTRL = $2000
 PPUMASK = $2001
@@ -78,6 +78,10 @@ wh_t: .res 1
 frame: .res 1
 slot: .res 1
 tmpc: .res 1
+tposl: .res 1
+tposh: .res 1
+ia: .res 1
+ibank: .res 1
 q_wr: .res 1
 q_rd: .res 1
 hud_dirty: .res 1
@@ -188,14 +192,16 @@ reset:
 : bit PPUSTAT
   bpl :-
 
+  ldx #1                 ; R1 = the fixed bank (obstacle tiles + font); R2-R5 are unused
+: stx $8000
+  lda #224
+  sta $8001
+  inx
+  cpx #6
+  bne :-
   lda #0
-  sta $8000
-  lda #0
-  sta $8001              ; R0 = sprite tiles 0-127
-  lda #1
-  sta $8000
-  lda #2
-  sta $8001              ; R1 = sprite tiles 128-255
+  sta $8000              ; R0 stays selected: the scanline IRQ only ever writes $8001
+  sta $8001
   lda #0
   sta OAMADDR
   lda #>oam
@@ -217,11 +223,12 @@ reset:
   jsr go_title
   lda #$1E
   sta mask
-  lda #$90
+  lda #$88
   sta ctrl
   lda PPUSTAT
   lda ctrl
   sta PPUCTRL
+  cli
 main:
   jsr wait_nmi
   inc frame
@@ -526,25 +533,23 @@ nmi:
   pla
   rti
 
-set_banks:                 ; the tunnel mosaic is advanced by swapping CHR banks
+IRQ_FIRST = 31
+IRQ_LATCH = 31
+
+set_banks:                 ; vblank: pick this frame's tunnel state, arm the band IRQ
+  lda #0
+  sta $8000              ; R0 selected
   ldx cycle
-  lda BANKSEL,x
-  ldy #2
-  sty $8000
-  sta $8001              ; R2: ring tiles 0-63
+  lda STATEBANK,x
+  sta $8001              ; band 0 for the top of the screen
   clc
-  adc #1
-  ldy #3
-  sty $8000
-  sta $8001              ; R3: ring tiles 64-127
-  ldy #4
-  sty $8000
-  lda #5
-  sta $8001              ; R4: obstacle tiles
-  ldy #5
-  sty $8000
-  lda #4
-  sta $8001              ; R5: font
+  adc #2
+  sta ibank              ; the IRQ moves on to band 1, 2, ...
+  sta $E000              ; acknowledge / disable
+  lda #IRQ_FIRST
+  sta $C000
+  sta $C001
+  sta $E001              ; enable
   rts
 
 ppu_update:
@@ -667,7 +672,19 @@ ppu_update:
   sta PPUMASK
   rts
 
-irq:
+irq:                       ; every 32 scanlines: next band of tunnel tiles. The write is first for timing.
+  sta ia
+  lda ibank
+  sta $8001
+  sta $E000              ; acknowledge
+  sta $E001              ; re-arm
+  clc
+  adc #2
+  sta ibank
+  lda #IRQ_LATCH
+  sta $C000
+  sta $C001
+  lda ia
   rti
 
 ; ------------------------------------------------------------------ game flow
@@ -817,14 +834,8 @@ game_update:
   sta facc
   bcc :+
   jsr inc_dist
-: ; tunnel colour cycling
-  lda tick8
-  clc
-  adc t0
-  sta tick8
-  bcc :+
-  jsr step_state
-: ; input
+: jsr advance_tunnel
+  ; input
   lda padn
   and #BTN_LEFT
   beq :+
@@ -960,15 +971,6 @@ game_update:
   jsr spawn
 @ret:
   rts
-
-step_state:
-  inc cycle
-  lda cycle
-  cmp #24
-  bcc :+
-  lda #0
-  sta cycle
-: rts
 
 inc_dist:
   lda #1
@@ -1240,27 +1242,39 @@ dying_update:
   rts
 
 ; ------------------------------------------------------------------ visuals
-tunnel_anim:               ; tunnel keeps flowing in title / game over screens
+tunnel_anim:               ; the tunnel keeps flowing on the title screen
   lda state
-  cmp #1
-  beq @r
-  cmp #2
-  beq @r
+  bne @r
+  jsr advance_tunnel
+@r:
+  rts
+
+; the tunnel advances spd * 2.125 / 256 rendered states per frame (the original's ring speed)
+advance_tunnel:
+  lda spd
+  asl a
+  sta t1
+  lda #0
+  rol a
+  sta t2
   lda spd
   lsr a
-  sta t0
-  lda state
-  beq @title
-  lda #0
-  sta t0
-@title:
-  lda tick8
+  lsr a
+  lsr a
   clc
-  adc t0
-  sta tick8
-  bcc @r
-  jsr step_state
-@r:
+  adc t1
+  sta t1
+  bcc :+
+  inc t2
+: lda tposl
+  clc
+  adc t1
+  sta tposl
+  lda tposh
+  adc t2
+  sta tposh
+  and #15
+  sta cycle
   rts
 
 update_pal:
@@ -1269,14 +1283,6 @@ update_pal:
   sta pal,x
   dex
   bpl :-
-  ; the light flickers
-  lda frame
-  lsr a
-  lsr a
-  and #1
-  tax
-  lda @flick,x
-  sta pal+14
   ; apply flash / fade
   lda #$0F
   sta pal
@@ -1319,7 +1325,6 @@ update_pal:
   sta sx
   rts
 @shk: .byte 0, 3, 0, 253
-@flick: .byte $20, $30
 
 clear_sprites:
   lda #$F0

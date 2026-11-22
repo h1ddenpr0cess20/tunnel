@@ -49,17 +49,117 @@ font_page[0x40 - 0x20] = tile_bytes([[2]*8 for _ in range(8)])   # '@' slot = th
 LIGHT_TILE = 0x40 + FONT_OFF
 BLANK_TILE = 0x20 + FONT_OFF
 
-# The tunnel's tiles are random per tile, like the original: tile = hash(ring, side, column),
-# 24-ring repeat. A ring tile is (ring a, pattern b); CHR bank state s recolours them so the
-# whole mosaic shifts one ring outward each state.
+# The tunnel is a pixel-exact raster of the original shader (tools/shader_port.py), fitted to NES
+# palettes and cut into 8x8 tiles. Every tile position gets its own image per animation state, so the
+# CHR is split into 2KB bands that the MMC3 scanline IRQ swaps in as the beam goes down the screen.
+import numpy as np
+sys.path.insert(0, 'tools')
+import shader_port as SP
+
 def _h(a, b, c):
     h = (a * 374761393 + b * 668265263 + c * 2246822519 + 7) & 0xFFFFFFFF
     h = ((h ^ (h >> 13)) * 1274126177) & 0xFFFFFFFF
     h = ((h ^ (h >> 16)) * 2654435761) & 0xFFFFFFFF
     return ((h ^ (h >> 15)) & 0xFFFFFF) / float(1 << 24)
-def pal3(r): return 1 if r < 0.516 else (2 if r < 0.875 else 3)   # dark / mid / bright, as in the shader
-NRINGS, NPAT, STATES = 14, 9, 24
-def ring_tile(a, b): return a * NPAT + b
+
+NES_RGB = np.array([[v & 255, (v >> 8) & 255, (v >> 16) & 255] for v in [
+ 0x525252,0xB40000,0xA00000,0xB1003D,0x740069,0x00005B,0x00005F,0x001840,0x002F10,0x084A08,0x006700,0x124200,0x6D2800,0x000000,0x000000,0x000000,
+ 0xC4D5E7,0xFF4000,0xDC0E22,0xFF476B,0xD7009F,0x680AD7,0x0019BC,0x0054B1,0x006A5B,0x008C03,0x00AB00,0x2C8800,0xA47200,0x000000,0x000000,0x000000,
+ 0xF8F8F8,0xFFAB3C,0xFF7981,0xFF5BC5,0xFF48F2,0xDF49FF,0x476DFF,0x00B4F7,0x00E0FF,0x00E375,0x03F42B,0x78B82E,0xE5E218,0x787878,0x000000,0x000000,
+ 0xFFFFFF,0xFFF2BE,0xF8B8B8,0xF8B8D8,0xFFB6FF,0xFFC3FF,0xC7D1FF,0x9ADAFF,0x88EDF8,0x83FFDD,0xB8F8B8,0xF5F8AC,0xFFFFB0,0xF8D8F8,0x000000,0x000000]], float)
+NES_OK = [i for i in range(64) if (i & 15) < 13 or i == 0x0F]
+def to_lab(rgb):
+    c = np.asarray(rgb, float) / 255.0
+    c = np.where(c > 0.04045, ((c + 0.055) / 1.055) ** 2.4, c / 12.92)
+    M = np.array([[0.4124, 0.3576, 0.1805], [0.2126, 0.7152, 0.0722], [0.0193, 0.1192, 0.9505]])
+    xyz = (c @ M.T) / np.array([0.95047, 1.0, 1.08883])
+    f = np.where(xyz > 0.008856, np.cbrt(xyz), 7.787 * xyz + 16 / 116.0)
+    return np.stack([116 * f[..., 1] - 16, 500 * (f[..., 0] - f[..., 1]), 200 * (f[..., 1] - f[..., 2])], -1)
+NES_LAB = to_lab(NES_RGB)
+def nes_near(rgb, avoid=()):
+    lab = to_lab(rgb)
+    best, bd = None, 1e18
+    for i in NES_OK:
+        if i in avoid: continue
+        d = float(((NES_LAB[i] - lab) ** 2).sum())
+        if d < bd: best, bd = i, d
+    return best
+
+STATES = 16
+TW, TH = 256, 208                         # tunnel area: tile rows 2..27
+SS = 2                                    # supersampling
+GPX = 1.0                                 # grout width in NES pixels
+
+def raster(state):
+    img, light = SP.render(TW * SS, TH * SS, state * 24.0 / STATES, gpx=GPX * SS)
+    img = img.reshape(TH, SS, TW, SS, 3).mean(axis=(1, 3))
+    lt = light.reshape(TH, SS, TW, SS).mean(axis=(1, 3)) > 0.5
+    return img * 255.0, lt
+
+def glow_field():
+    xs = (np.arange(TW) + 0.5) / TW * 2 - 1; ys = 1 - (np.arange(TH) + 0.5) / TH * 2
+    tY = min(1.1, max(0.55, TH / TW)); tX = tY * TW / TH
+    X, Y = np.meshgrid(xs, ys)
+    d = np.stack([X * tX, Y * tY, -np.ones_like(X)], -1); d /= np.linalg.norm(d, axis=-1, keepdims=True)
+    rz = -d[..., 2]
+    ang2 = np.maximum(0.0, 2.0 * (1.0 - rz)); sig2 = 1.0 / (SP.LIGHT_D ** 2)
+    return 0.55 * np.exp(-ang2 / (sig2 * 4.0)) + 0.16 * np.exp(-ang2 / (sig2 * 40.0))
+
+print('rendering tunnel states...', file=sys.stderr)
+RASTERS = [raster(k) for k in range(STATES)]
+GLOW = glow_field()
+
+# block palettes: 0 plain, 1 bloom, 2 strong bloom (3 is the text palette)
+BR, BC = TH // 16, TW // 16
+blk_glow = GLOW.reshape(BR, 16, BC, 16).mean(axis=(1, 3))
+blk_pal = np.zeros((BR, BC), int)
+blk_pal[blk_glow >= 0.10] = 1
+blk_pal[blk_glow >= 0.28] = 2
+
+# The three tile reds map to the NES red ramp ($06 dark, $16 red, $26 light red); the bloom palettes
+# step that ramp up by one and by two, ending in white at the light.
+PALS = [[0x0F, 0x06, 0x16, 0x26], [0x0F, 0x16, 0x26, 0x36], [0x0F, 0x26, 0x36, 0x30]]
+print('bg palettes', [[hex(c) for c in p] for p in PALS], file=sys.stderr)
+base = np.array([SP.C_DARK, SP.C_MID, SP.C_BRIGHT]) * 255.0
+tint = np.array([1.0, 0.86, 0.78]) * 255.0
+ANCHORS = []
+for pi in range(3):
+    sel = np.kron(blk_pal == pi, np.ones((16, 16), bool))
+    g = float(GLOW[sel].mean()) if sel.any() else 0.0
+    cols = np.minimum(255.0, base + tint * g)
+    if pi == 2: cols[2] = SP.C_LIGHT * 255.0
+    ANCHORS.append(np.vstack([SP.C_GROUT * 255.0, cols]))
+ANCHORS.append(NES_RGB[[0x0F, 0x06, 0x30, 0x30]])
+PALS.append([0x0F, 0x06, 0x30, 0x30])                              # text palette
+                              # text palette
+
+DITHER_TOL = 500.0       # only dither where no single palette colour is close
+BAYER = (np.array([[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]]) + 0.5) / 16.0
+PAIRS_IJ = [(i, j) for i in range(4) for j in range(i + 1, 4)]
+def fit_tile(img, r, c, pal_idx):
+    """Quantize an 8x8 block to the 4 palette entries, using the best two-colour mix + ordered dither."""
+    blk = img[(r - 2) * 8:(r - 2) * 8 + 8, c * 8:c * 8 + 8]
+    cols = ANCHORS[pal_idx]
+    best_res = np.full((8, 8), 1e18); out = np.zeros((8, 8), int)
+    ys, xs = np.mgrid[0:8, 0:8]
+    thr = BAYER[(ys + (r - 2) * 8) % 4, (xs + c * 8) % 4]
+    for i, j in PAIRS_IJ:
+        d = cols[j] - cols[i]
+        t = np.clip(((blk - cols[i]) @ d) / max(float(d @ d), 1e-6), 0, 1)
+        res = ((blk - (cols[i] + t[..., None] * d)) ** 2).sum(-1)
+        pick = np.where(thr < t, j, i)
+        better = res < best_res
+        out = np.where(better, pick, out); best_res = np.where(better, res, best_res)
+    d1 = ((blk[:, :, None, :] - cols[None, None]) ** 2).sum(-1)
+    nearest = d1.argmin(axis=2)
+    return np.where(d1.min(axis=2) < DITHER_TOL, nearest, out)
+
+CHR_TILE = {}      # (state, row, col) -> 8x8 index image
+for st, (img, lt) in enumerate(RASTERS):
+    for r in range(2, 28):
+        for c in range(32):
+            CHR_TILE[(st, r, c)] = fit_tile(img, r, c, int(blk_pal[(r - 2) // 2, c // 2]))
+
 bg = None
 
 # ---------------------------------------------------------------- obstacles (background tiles)
@@ -73,14 +173,17 @@ def camx(c2): return (c2 - 2) / 3.0
 KINDS = ['pit', 'pillar', 'wall', 'beam']
 
 def obs_tile(cls, var):
-    cell = [4, 3, 2, 2][cls]
+    """Box faces in the original use the tunnel's tile colours darkened to 0.42 with grout:
+    bright tiles -> NES $06, mid tiles -> half dithered with black, dark tiles -> black."""
+    cell = [8, 5, 3, 3][cls]
     px = [[0]*8 for _ in range(8)]
     for y in range(8):
         for x in range(8):
+            if cls == 3: continue                                              # pit: black hole
             if x % cell == cell - 1 or y % cell == cell - 1: continue          # grout
             r = _h(var, (y // cell) * 8 + x // cell, 11 + cls)
-            if cls == 3: px[y][x] = 0                                          # pit: black hole
-            else: px[y][x] = 0 if r < 0.3 else 1                                # dark red tiles, some black
+            if r < 0.516: continue                                             # dark tile -> black
+            px[y][x] = 1 if (r >= 0.875 or (x + y) % 2 == 0) else 0
     return tile_bytes(px)
 obs_page = [obs_tile(c, v) for c in range(4) for v in range(16)]
 
@@ -97,7 +200,7 @@ def rows(y0, y1):
 def span_record(t, c2, lane, k):
     z = Zst(k); cx = camx(c2)
     X0, X1 = LANES[lane]
-    cls = 3 if t == 0 else (0 if k <= 2 else (1 if k <= 6 else 2))
+    cls = 3 if t == 0 else (0 if k == 0 else (1 if k <= 2 else 2))
     if t == 0:       # pit: a strip of floor between z and z+0.5, narrowing with distance
         z1 = z + 0.5
         r_top = int(round((128 + VS / z1) / 8.0)); r_bot = int(round((128 + VS / z) / 8.0))
@@ -116,31 +219,39 @@ def span_record(t, c2, lane, k):
     if c1 <= c0 or r1 <= r0: return [cls, 2, 0, 0, 0]
     return [cls, r0, r1 - r0, c0, c1]
 
-# CHR layout (1KB units): 0-3 sprites (unused), 4 font, 5 obstacle tiles, then 2 units per ring state.
-chunks = [bytes(4096)]
-chunks.append(b''.join(font_page))
-chunks.append(b''.join(obs_page))
+# CHR layout: STATES x 7 bands of 2KB (rows 4g..4g+3, tile = (row%4)*32+col), then one fixed 2KB
+# bank with the obstacle tiles (128-191) and the font (192-255).
+chunks = []
 for st in range(STATES):
-    tiles_ = []
-    for a_ in range(NRINGS):
-        d_ = a_ + 2
-        for b_ in range(NPAT):
-            f = 0.25 * d_ + 0.1                       # tile size shrinks progressively toward the light
-            cell = int(f) + (1 if (b_ + 0.5) / NPAT < f - int(f) else 0)
-            cell = max(2, min(4, cell))
-            k_ = (a_ - st) % 24
-            px = [[0]*8 for _ in range(8)]
-            for y in range(8):
-                for x in range(8):
-                    if x % cell == cell - 1 or y % cell == cell - 1: continue
-                    px[y][x] = pal3(_h(k_, b_ * 64 + (y // cell) * 8 + (x // cell), 1))
-            tiles_.append(tile_bytes(px))
-    tiles_ += [tile_bytes(blank)] * (128 - len(tiles_))
-    chunks.append(b''.join(tiles_))
+    for g in range(7):
+        band = []
+        for t in range(128):
+            r, c = 4 * g + t // 32, t % 32
+            if (st, r, c) in CHR_TILE:
+                px = CHR_TILE[(st, r, c)]
+                band.append(tile_bytes([[int(px[y][x]) for x in range(8)] for y in range(8)]))
+            else:
+                band.append(tile_bytes(blank))
+        chunks.append(b''.join(band))
+chunks.append(b''.join(obs_page))
+chunks.append(b''.join(font_page))
 chr_data = b''.join(chunks)
-chr_data += bytes(7 * 8192 - len(chr_data))
+CHR_BANKS = (len(chr_data) + 8191) // 8192
+chr_data += bytes(CHR_BANKS * 8192 - len(chr_data))
 open('chr.bin', 'wb').write(chr_data)
-print(f'chr {len(chr_data)//1024}KB', file=sys.stderr)
+print(f'chr {len(chr_data)//1024}KB ({CHR_BANKS} x 8KB)', file=sys.stderr)
+
+# preview of what the PPU will show for a state (for checking the fit)
+def preview(state, path):
+    from PIL import Image
+    out = np.zeros((TH, TW, 3), np.uint8)
+    for r in range(2, 28):
+        for c in range(32):
+            pal = PALS[int(blk_pal[(r - 2) // 2, c // 2])]
+            px = CHR_TILE[(state, r, c)]
+            out[(r - 2) * 8:(r - 2) * 8 + 8, c * 8:c * 8 + 8] = NES_RGB[np.array(pal)[px]].astype(np.uint8)
+    Image.fromarray(out).resize((TW * 3, TH * 3), Image.NEAREST).save(path)
+if '--preview' in sys.argv: preview(0, 'preview0.png'); preview(5, 'preview5.png')
 
 # ---------------------------------------------------------------- tables
 emit('; generated by tools_assets.py -- do not edit')
@@ -168,38 +279,19 @@ label('THEMES')   # 3 shades dark -> light, per theme
 THEMES = [(0x06,0x16,0x26),(0x06,0x16,0x26),(0x06,0x16,0x26),(0x05,0x15,0x25),(0x07,0x17,0x27),(0x06,0x16,0x26)]  # reds, like the original
 bytes_([c for t in THEMES for c in t], 3)
 label('INIT_PAL')
-bytes_([0x0F,0x06,0x16,0x26,  0x0F,0x05,0x06,0x16,  0x0F,0x16,0x26,0x36,  0x0F,0x06,0x30,0x30,
-        0x0F,0x06,0x16,0x0F,  0x0F,0x16,0x26,0x0F,  0x0F,0x06,0x26,0x0F,  0x0F,0x06,0x16,0x0F], 4)
-label('BANKSEL'); bytes_([6 + 2*st for st in range(STATES)], 12)
+bytes_([v for p_ in PALS for v in p_] + [0x0F] * 16, 4)
+label('STATEBANK'); bytes_([14 * st for st in range(STATES)], 16)
 
 # ---------------------------------------------------------------- nametables
 def nametable(hud_digits_row=True):
     tiles = [[BLANK_TILE]*32 for _ in range(30)]
-    attr_blocks = [[0]*16 for _ in range(15)]
-    for r in range(2, 30):
+    attr_blocks = [[3]*16 for _ in range(15)]          # default: text palette (HUD rows, status bar)
+    for r in range(2, 28):
         for c in range(32):
-            dx = 15 - c if c <= 15 else c - 16
-            dy = 15 - r if r <= 15 else r - 16
-            d = max(dx, dy)
-            if d <= 1:
-                tiles[r][c] = LIGHT_TILE
-            else:
-                if dx > dy: side, j = (0 if c <= 15 else 1), r
-                else:       side, j = (2 if r <= 15 else 3), c
-                b_ = int(_h(side, j, 3) * NPAT) % NPAT
-                tiles[r][c] = ring_tile(d - 2, b_)
-    for br in range(1, 15):
+            tiles[r][c] = (r % 4) * 32 + c
+    for br in range(1, 14):
         for bc in range(16):
-            # block centre in tile units
-            rr = [br * 2, br * 2 + 1]; cc = [bc * 2, bc * 2 + 1]
-            dxs = [15 - c if c <= 15 else c - 16 for c in cc]; dys = [15 - r_ if r_ <= 15 else r_ - 16 for r_ in rr]
-            dx, dy, r = min(dxs), min(dys), rr[0]
-            d = max(dx, dy)
-            if d <= 1: attr_blocks[br][bc] = 3          # the light: white from the text palette
-            elif d <= 3: attr_blocks[br][bc] = 2        # glow around it
-            elif d <= 6: attr_blocks[br][bc] = 1        # fog: far rings are a little darker
-            elif dy > dx and r <= 15: attr_blocks[br][bc] = 1   # ceiling is darker
-    for bc in range(16): attr_blocks[0][bc] = 3
+            attr_blocks[br][bc] = int(blk_pal[br - 1][bc])
     return tiles, attr_blocks
 
 def pack_attr(blocks):
