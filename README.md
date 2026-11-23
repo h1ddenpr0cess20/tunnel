@@ -59,5 +59,12 @@ soundtrack. Play it in the browser at `/nes.html` (jsnes) or load `nes/tunnel.ne
 - Build with `nes/build.sh` (needs cc65 and python3 with numpy and Pillow). `nes/record_gif.sh` plays a
   round with a bot and writes a GIF.
 
+- The camera follows the player like `camera()` in `src/game.js` (lane, jump and slide height, roll
+  while changing lanes, head bob, pitch when falling into a pit). The tunnel picture is fixed, so the
+  camera is a shear of it: an MMC3 scanline IRQ rewrites the scroll every 8 lines (sideways) and every
+  32-line tile band (vertical), from a list the main loop rebuilds only when the camera moves.
+
 Known differences: obstacles are tile footprints rather than ray-traced boxes (no side faces or pit
-walls), and the camera does not move vertically when jumping or sliding.
+walls); the sideways camera shears the picture row by row, so off-centre the tunnel's rings bend
+instead of shifting and the screen edge repeats the nearest wall column; vertical motion is scaled
+down to a quarter.

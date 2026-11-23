@@ -202,7 +202,7 @@ reset:
   lda #2
   sta state
   jsr go_title
-  lda #$1E
+  lda #$0A               ; background only: the sprite page holds the camera's scroll list
   sta mask
   lda #$88
   sta ctrl
@@ -232,7 +232,6 @@ main:
 
 st_title:
   jsr tunnel_anim
-  jsr clear_sprites
   jsr update_pal
   jsr calc_bands
   lda padn
@@ -243,7 +242,6 @@ st_title:
 
 st_over:
   jsr tunnel_anim
-  jsr clear_sprites
   jsr update_pal
   jsr calc_bands
   lda padn
@@ -460,6 +458,16 @@ show_over:
   sta busy
   lda #0
   sta PPUMASK
+  lda PPUSTAT            ; while playing, the first nametable holds the camera's edge filler
+  lda #$20
+  sta PPUADDR
+  lda #$00
+  sta PPUADDR
+  lda #<NT0
+  sta ptr
+  lda #>NT0
+  sta ptr+1
+  jsr copy_nt
   SETSTR STR_OVER, 0, 5
   lda kind
   clc
@@ -529,21 +537,13 @@ set_banks:                 ; vblank: pick this frame's tunnel state, arm the ban
   lda STATEBANK,x
   sta $8001              ; band 0 for the top of the screen
   sta ibank              ; the IRQ rewrites band 0, then moves on to band 1, 2, ...
-  lda #0
+  lda epend              ; the camera's scroll list for this frame, if the main loop finished one
+  bmi :+
+  sta efront
+  lda #$FF
+  sta epend
+: lda efront
   sta iseq
-  ldx #7
-: lda nbx,x              ; the camera's per-band scroll, computed by the main loop
-  sta bsx,x
-  lda nbn,x
-  sta bsn,x
-  lda nby,x
-  sta bsy,x
-  lda nbo,x
-  sta bso,x
-  lda nbl,x
-  sta bsl,x
-  dex
-  bpl :-
   sta $E000              ; acknowledge / disable
   lda #IRQ_FIRST
   sta $C000
@@ -670,36 +670,54 @@ ppu_update:
   sta PPUMASK
   rts
 
-irq:                       ; 8 per frame: next band of tunnel tiles, then that band's camera scroll
+irq:                       ; one per scroll list entry: tile bank and full scroll at band starts, else X only
   sta ia
+  stx ix
+  ldx iseq
+  inc iseq
+  lda ev_n,x
+  bpl @xonly
   lda ibank
   sta $8001              ; (the first IRQ rewrites band 0)
-  sta $E000              ; acknowledge
-  sta $E001              ; re-arm
   clc
   adc #2
   sta ibank
-  stx ix
-  ldx iseq
-  lda bsl,x              ; lines until the next band starts
+  sta $E000              ; acknowledge
+  sta $E001              ; re-arm
+  lda ev_l,x             ; lines until the next entry, minus one
   sta $C000
   sta $C001
   lda busy               ; the main loop is writing VRAM with rendering off: leave the PPU alone
-  bne @skip
-  bit PPUSTAT            ; mid-frame scroll: nametable, Y, X, then the low address byte loads v
-  lda bsn,x
-  sta PPUADDR
-  lda bsy,x
-  sta PPUSCRL
-  lda bsx,x
-  sta PPUSCRL
-  lda bso,x
-  sta PPUADDR
-@skip:
-  cpx #7
   bne :+
-  sta $E000              ; last band: no more IRQs this frame
-: inc iseq
+  bit PPUSTAT            ; mid-frame scroll: nametable, Y, X, then the low address byte loads v
+  lda ev_n,x
+  sta PPUADDR
+  lda ev_y,x
+  sta PPUSCRL
+  lda ev_x,x
+  sta PPUSCRL
+  lda ev_o,x
+  sta PPUADDR
+: lda ev_n,x
+  and #$40
+  beq @r
+  sta $E000              ; last entry: no more IRQs this frame
+  bne @r
+@xonly:                    ; coarse X and the nametable bit reach v at the end of this line
+  sta $E000
+  sta $E001
+  lda ev_l,x
+  sta $C000
+  sta $C001
+  lda busy
+  bne @r
+  bit PPUSTAT
+  lda ev_n,x
+  ora #$80
+  sta PPUCTRL
+  lda ev_x,x
+  sta PPUSCRL
+@r:
   ldx ix
   lda ia
   rti
@@ -809,17 +827,6 @@ update_pal:
   sta sx
   rts
 @shk: .byte 0, 3, 0, 253
-
-clear_sprites:
-  lda #$F0
-  ldx #0
-: sta oam,x
-  inx
-  inx
-  inx
-  inx
-  bne :-
-  rts
 
 ; rr = row, X = set: carry set if the row is not covered, else spc0/spc1 = first/last+1 column
 span_at:

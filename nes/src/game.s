@@ -7,31 +7,65 @@
 
 ; ------------------------------------------------------------------ math
 ; (mAh:mAl) * (mBh:mBl) unsigned -> mR3..mR0
-umul16:
-  lda #0
-  sta mR0
+umul16:                    ; quarter-square partial products (Y kept; X = 0 and mB = 0 on return)
+  sty qy
+  lda mAl
+  ldy mBl
+  jsr qmul
   sta mR1
+  lda qlo
+  sta mR0
+  lda #0
   sta mR2
   sta mR3
-  ldx #16
-@l:
-  lsr mBh
-  ror mBl
-  bcc @n
+  lda mBh
+  beq @b0
+  ldy mAl
+  jsr qmul               ; al * bh
+  sta qt
+  lda qlo
   clc
-  lda mR2
-  adc mAl
+  adc mR1
+  sta mR1
+  lda qt
+  adc mR2
   sta mR2
-  lda mR3
-  adc mAh
+  bcc @b0
+  inc mR3
+@b0:
+  lda mAh
+  beq @done
+  ldy mBl
+  jsr qmul               ; ah * bl
+  sta qt
+  lda qlo
+  clc
+  adc mR1
+  sta mR1
+  lda qt
+  adc mR2
+  sta mR2
+  bcc :+
+  inc mR3
+: lda mBh
+  beq @done
+  ldy mAh
+  jsr qmul               ; ah * bh
+  clc
+  adc mR3
   sta mR3
-@n:
-  ror mR3
-  ror mR2
-  ror mR1
-  ror mR0
-  dex
-  bne @l
+  lda qlo
+  clc
+  adc mR2
+  sta mR2
+  bcc @done
+  inc mR3
+@done:
+  lda #0
+  sta mBl
+  sta mBh
+  tax
+  ldy qy
   rts
 
 ; signed (mA) * unsigned (mB) -> signed 32-bit in mR3..mR0
@@ -98,8 +132,46 @@ umul16x8:
   bne @l
   rts
 
-; 16-bit arithmetic shift right of (gt1:gt0) by X bits
+; 16-bit arithmetic shift right of (gt1:gt0) by X bits (X = 0 on return, Y kept)
 asr16:
+  cpx #8
+  bcc @lt8
+  lda gt1                ; 8 or more: move a byte first
+  sta gt0
+  asl a
+  lda #0
+  adc #$FF
+  eor #$FF
+  sta gt1
+  txa
+  sec
+  sbc #8
+  tax
+  jmp @l0
+@lt8:
+  cpx #5
+  bcc @l0
+  lda gt1                ; 5 to 7: shift left by 8 - X into a third byte and drop the low one
+  asl a
+  lda #0
+  adc #$FF
+  eor #$FF
+  sta qt
+  txa
+  eor #7
+  tax
+  inx
+: asl gt0
+  rol gt1
+  rol qt
+  dex
+  bne :-
+  lda gt1
+  sta gt0
+  lda qt
+  sta gt1
+  rts
+@l0:
   cpx #0
   beq @r
 @l:
@@ -2428,11 +2500,12 @@ RECIP8: .byte 255, 255, 128, 85, 64, 51, 43, 37, 32, 28, 26, 23, 21, 20, 19, 17,
 ; The tunnel is a fixed picture, so the camera is a shear of it: a floor or ceiling point that is
 ; (r - 120) pixels from the horizon is 128/z = (r - 120) / (1 + eye) units close, so an eye move of
 ; dx, dy shifts that row by dx * |r - 120| pixels sideways and dy * |r - 120| pixels vertically;
-; roll turns the picture about the centre. The shift is applied per 32-line band with a mid-frame
-; scroll write. The band's tile bank switches on the line where its source pixels start, so the
-; per-band tile images always match. Vertical motion is scaled to a quarter and clamped to 16 px.
+; roll turns the picture about the centre. Vertical motion is applied per 32-line band (scaled to a
+; quarter and clamped to 16 px): the band's tile bank switches on the line where its source pixels
+; start, so the per-band tile images always match. The sideways shift changes every 8 lines, so the
+; shear is a smooth slope instead of a staircase. Both are mid-frame scroll writes from the MMC3
+; scanline IRQ, driven by a list built here.
 BAND_W:  .byte 96, 72, 40, 8, 24, 56, 88, 0
-BOBX:    .byte 0,0,0,1,1,1,1,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1,1,1,1,1,1,0,0
 BOBY:    .byte 253,254,254,255,255,0,0,1,1,1,2,2,2,2,2,3,3,3,2,2,2,2,2,1,1,1,0,0,255,255,254,254
 
 calc_bands:
@@ -2472,32 +2545,16 @@ calc_bands:
   clc
   adc bph
   sta bph
-  bcc :+
-  lda bpar
-  eor #1
-  sta bpar
-: lda bph
   lsr a
   lsr a
   lsr a
-  tax
-  lda BOBX,x
-  ldy bpar
-  beq :+
-  eor #$FF
-  clc
-  adc #1
-: sta cdxl
-  ora #0
-  bpl :+
-  lda #$FF
-  sta cdxh
-: lda BOBY,x
+  tax                    ; (no sideways bob: under a pixel, and it would rebuild the scroll list)
+  lda BOBY,x
   sta cdyl
   bpl :+
   lda #$FF
   sta cdyh
-: 
+:
 @nobob:
   ; x and eye height
   clc
@@ -2553,71 +2610,35 @@ calc_bands:
   lda mR2
   sta crlh
 @bands:
-  ldx #7
-@b:
-  lda #0
-  sta nbf,x
-  stx t3
-  lda BAND_W,x
-  bne :+
-  lda sx                  ; the status line only shakes
-  sta nbx,x
-  jmp @next
-: sta ctx
-  ; sideways: dx * w
-  sta mBl
-  lda #0
-  sta mBh
-  lda cdxl
-  sta mAl
-  lda cdxh
-  sta mAh
-  jsr smulu
-  lda mR1
-  pha
-  ; roll: signed distance from the horizon
-  lda ctx
-  sta mBl
-  lda #0
-  sta mBh
-  lda crll
-  sta mAl
-  lda crlh
-  sta mAh
-  jsr smulu
-  ldx t3
-  lda mR1
-  cpx #4
-  bcs :+                  ; above the horizon the sign flips
+  ; --- vertical: f_b = -(dy * w_b) / 4 per 32-line band (pixels the band's picture moves up)
+  ldy #0                 ; dy magnitude and sign
+  lda cdyl
+  ldx cdyh
+  bpl :+
   eor #$FF
   clc
   adc #1
-: clc
-  adc sx
-  sta nbx,x
-  pla
-  clc
-  adc nbx,x
-  sta nbx,x
-  ; vertical: dy * w / 4, picture moves down when the eye rises
-  lda ctx
-  sta mBl
+  dey
+: sta cmag
+  sty csgn
+  ldx #7
+@b:
+  stx t3
   lda #0
-  sta mBh
-  lda cdyl
-  sta mAl
-  lda cdyh
-  sta mAh
-  jsr smulu
-  ldx t3
-  lda mR1
-  cmp #$80
-  ror a
-  cmp #$80
-  ror a
-  eor #$FF
+  sta nbf,x
+  lda BAND_W,x
+  beq @next
+  tay
+  lda cmag
+  jsr qmul               ; |dy| * w / 256
+  lsr a
+  lsr a                  ; / 4
+  ldy csgn
+  bmi :+
+  eor #$FF               ; the picture moves down when the eye rises
   clc
-  adc #1                  ; f = -(dy * w) / 4
+  adc #1
+: ldx t3
   sta nbf,x
 @next:
   ; falling into a pit: the camera pitches down
@@ -2657,63 +2678,26 @@ calc_bands:
   lda #0
 : sta nbf,x
   dex
-  bmi :+
-  jmp @b
-: ; --- second pass: nametable bits, scroll values, and where each band starts on the screen
-  ldx #7
-@p:
-  lda nbx,x
-  tay
-  lda #0
-  cpx #7
-  beq @nt
-  lda ctrl
-  and #1
-  asl a
-  asl a
-@nt:
-  cpy #$80
-  bcc :+
-  eor #4                  ; negative scroll: the left neighbour's right edge
-: sta nbn,x
-  ; Y: band 0 starts at line 16, the others at their source line 32 * b
-  txa
+  bpl @b
+  ; --- where each band's source starts: band 0 at line 16 + f0, band 7 (status line) at 224, the
+  ; others at 32 b; and where it starts on the screen: S0 = 16, S_b = 32 b - max(f_b, f_(b-1)) (the
+  ; later band never starts after the line where the previous band's source pixels run out)
+  ldx #6
+: txa
   asl a
   asl a
   asl a
   asl a
   asl a
-  cpx #7
-  bne :+
-  lda #224
-: cpx #0
-  bne :+
+  sta nby,x
+  dex
+  bne :-
   lda #16
   clc
-  adc nbf,x
-: sta nby,x
-  ; low byte of v: coarse Y low bits, coarse X
-  lda nby,x
-  lsr a
-  lsr a
-  lsr a
-  and #7
-  asl a
-  asl a
-  asl a
-  asl a
-  asl a
-  sta ctx
-  lda nbx,x
-  lsr a
-  lsr a
-  lsr a
-  ora ctx
-  sta nbo,x
-  dex
-  bpl @p
-  ; where each band starts on the screen: S0 = 16, S_b = 32 b - max(f_b, f_(b-1)) (the later band never
-  ; starts after the line where the previous band's source pixels run out)
+  adc nbf
+  sta nby
+  lda #224
+  sta nby+7
   lda #16
   sta nbs
   ldx #1
@@ -2736,23 +2720,453 @@ calc_bands:
   asl a
   sec
   sbc ctx
-  sta nbs,x
+  sta cd
+  lda nbs-1,x            ; every band keeps at least 4 lines, so the IRQs stay apart
+  clc
+  adc #4
+  cmp cd
+  bcs :+
+  lda cd
+: sta nbs,x
   inx
   cpx #8
   bne @s
-  ldx #6                 ; lines from one start to the next, minus one
-@l:
-  lda nbs+1,x
+  ; --- sideways shift per screen line: a floor or ceiling row w lines from the horizon moves by
+  ; (x -/+ roll) * w, above / below the horizon. |x -/+ roll| < 1, kept as magnitude and sign.
   sec
-  sbc nbs,x
-  sec
-  sbc #1
-  sta nbl,x
-  dex
-  bpl @l
-  lda #0
-  sta nbl+7
+  lda cdxl
+  sbc crll
+  tay
+  lda cdxh
+  sbc crlh
+  jsr @mag
+  sta cam_a
+  sty cas_a
+  ldx #0                 ; and per 8 lines
+  asl a
+  bcc :+
+  inx
+: stx sth_a
+  asl a
+  rol sth_a
+  asl a
+  rol sth_a
+  sta stl_a
+  clc
+  lda cdxl
+  adc crll
+  tay
+  lda cdxh
+  adc crlh
+  jsr @mag
+  sta cam_b
+  sty cas_b
+  ldx #0                 ; and per 8 lines
+  asl a
+  bcc :+
+  inx
+: stx sth_b
+  asl a
+  rol sth_b
+  asl a
+  rol sth_b
+  sta stl_b
+  ; --- the scroll list. Every band starts with a tile bank switch and a full scroll write; after
+  ; that only the sideways shift changes, every 8 lines. It goes into the buffer the IRQ is not
+  ; reading; the NMI swaps them. Within a band the shift is accumulated: |A| * w moves by |A| * 8.
+  ; Nothing to do when the camera has not moved since the last list.
+  ldy #0
+  lda cdxl
+  cmp ckey+0
+  beq :+
+  sta ckey+0
+  iny
+:
+  lda cdxh
+  cmp ckey+1
+  beq :+
+  sta ckey+1
+  iny
+:
+  lda crll
+  cmp ckey+2
+  beq :+
+  sta ckey+2
+  iny
+:
+  lda crlh
+  cmp ckey+3
+  beq :+
+  sta ckey+3
+  iny
+:
+  lda sx
+  cmp ckey+4
+  beq :+
+  sta ckey+4
+  iny
+:
+  lda ctrl
+  cmp ckey+5
+  beq :+
+  sta ckey+5
+  iny
+:
+  lda nbf+0
+  cmp ckey+6
+  beq :+
+  sta ckey+6
+  iny
+:
+  lda nbf+1
+  cmp ckey+7
+  beq :+
+  sta ckey+7
+  iny
+:
+  lda nbf+2
+  cmp ckey+8
+  beq :+
+  sta ckey+8
+  iny
+:
+  lda nbf+3
+  cmp ckey+9
+  beq :+
+  sta ckey+9
+  iny
+:
+  lda nbf+4
+  cmp ckey+10
+  beq :+
+  sta ckey+10
+  iny
+:
+  lda nbf+5
+  cmp ckey+11
+  beq :+
+  sta ckey+11
+  iny
+:
+  lda nbf+6
+  cmp ckey+12
+  beq :+
+  sta ckey+12
+  iny
+:
+  tya
+  bne :+
   rts
+: lda #$FF
+  sta epend
+  lda efront
+  eor #EVN
+  sta eb
+  sta ei
+  lda ctrl
+  and #$7F
+  sta cctl               ; PPUCTRL for the sideways-only entries (the IRQ sets bit 7 again)
+  and #1
+  asl a
+  asl a
+  sta cnt_               ; nametable bits for the full entries
+  lda #0
+  sta cb
+@band:
+  ldy cb
+  lda nbs,y
+  sta cl
+  lda nby,y
+  sta cs
+  lda nbs+1,y            ; strips after the first: cl + 8 k <= next band - 4, source line < 236
+  clc
+  sbc cl
+  sec
+  sbc #3
+  bcs :+
+  lda #0
+: lsr a
+  lsr a
+  lsr a
+  sta ccnt
+  lda #235
+  sec
+  sbc cs
+  lsr a
+  lsr a
+  lsr a
+  cmp ccnt
+  bcs :+
+  sta ccnt
+: jsr @start
+  ldx ei
+  jsr @fix
+  jsr @x                 ; band start: bank switch, nametable, Y and X
+  sta ev_x,x
+  tay
+  lsr a
+  lsr a
+  lsr a
+  sta ctx
+  lda cs
+  sta ev_y,x
+  and #$38
+  asl a
+  asl a
+  ora ctx
+  sta ev_o,x
+  lda cnt_
+  cpy #$80
+  bcc :+
+  eor #4                 ; negative scroll: the left neighbour's right edge
+: ora #$80
+  sta ev_n,x
+  lda #7
+  sta ev_l,x
+  lda cl                 ; the tile rows at the middle of each strip, for the obstacles
+  clc
+  adc #4
+  lsr a
+  lsr a
+  lsr a
+  tay
+  txa
+  sta rowev,y
+  iny
+  inx
+  lda ccnt
+  sta ctmp
+  bne @sl
+  jmp @bend
+@sl:
+  bit cside
+  bpl @dn
+  lda cwd                ; above the horizon: w shrinks by 8
+  sec
+  sbc #8
+  bcc @cr
+  sta cwd
+  lda acl
+  sbc stl_a
+  sta acl
+  lda ach
+  sbc sth_a
+  sta ach
+  jmp @hv
+@cr:
+  stx ei                 ; crossing the horizon: below it, 8 - w lines from it
+  sty crow
+  lda #8
+  sec
+  sbc cwd
+  tay
+  lda cam_b
+  jsr qmul
+  sta ach
+  lda qlo
+  sta acl
+  lda cas_b
+  sta csd
+  lda #0
+  sta cside
+  ldx ei
+  ldy crow
+  jmp @hv
+@dn:
+  clc
+  lda acl
+  adc stl_b
+  sta acl
+  lda ach
+  adc sth_b
+  sta ach
+@hv:
+  lda acl                ; X = sx +/- round(acc / 256)
+  asl a
+  lda ach
+  adc #0
+  bit csd
+  bpl :+
+  eor #$FF
+  sec
+  adc sx
+  jmp @st
+: clc
+  adc sx
+@st:
+  sta ev_x,x
+  asl a                  ; negative: the other nametable (bit 1 is ignored mid-frame)
+  lda cctl
+  adc #0
+  sta ev_n,x
+  lda #7
+  sta ev_l,x
+  txa
+  sta rowev,y
+  iny
+  inx
+  dec ctmp
+  beq @bend
+  jmp @sl
+@bend:
+  stx ei
+  lda ccnt               ; the line of this band's last entry
+  asl a
+  asl a
+  asl a
+  clc
+  adc cl
+  sta cpl
+  inc cb
+  lda cb
+  cmp #7
+  beq :+
+  jmp @band
+: ; the status line: still, apart from the shake
+  lda nbs+7
+  sta cl
+  jsr @fix
+  lda #224
+  sta ev_y,x
+  lda sx
+  sta ev_x,x
+  lsr a
+  lsr a
+  lsr a
+  ora #$80               ; (224 & $38) << 2
+  sta ev_o,x
+  lda #$C0               ; bank switch, last
+  ldy sx
+  bpl :+
+  ora #4
+: sta ev_n,x
+  lda #0                 ; no IRQ after the last entry
+  sta ev_l,x
+  lda eb
+  sta epend              ; ready: the NMI may hand it to the IRQ
+  rts
+
+@fix:                    ; the previous band's last entry counts the lines to this one (at cl)
+  cpx eb
+  beq :+
+  lda cl
+  clc
+  sbc cpl
+  sta ev_l-1,x
+: rts
+
+@x:                      ; A = sx +/- round(acc / 256)
+  lda acl
+  asl a
+  lda ach
+  adc #0
+  bit csd
+  bpl :+
+  eor #$FF
+  sec
+  adc sx
+  rts
+: clc
+  adc sx
+  rts
+
+@mag:                    ; A:Y = signed 8.8 -> A = magnitude (at most 255), Y = 0 or $FF
+  bmi @mneg
+  beq :+
+  lda #255
+  ldy #0
+  rts
+: tya
+  ldy #0
+  rts
+@mneg:
+  cmp #$FF
+  bne :+
+  tya
+  eor #$FF
+  clc
+  adc #1
+  beq :+                 ; -256
+  ldy #$FF
+  rts
+: lda #255
+  ldy #$FF
+  rts
+
+@start:                  ; acc = |A| * w for the strip starting at source line cs; side and sign
+  lda cs
+  clc
+  adc #4                 ; middle of the strip
+  sec
+  sbc #120
+  bcs @below
+  eor #$FF
+  adc #1
+  sta cwd
+  tay
+  lda #$FF
+  sta cside
+  lda cam_a
+  jsr qmul
+  sta ach
+  lda qlo
+  sta acl
+  lda cas_a
+  sta csd
+  rts
+@below:
+  sta cwd
+  tay
+  lda #0
+  sta cside
+  lda cam_b
+  jsr qmul
+  sta ach
+  lda qlo
+  sta acl
+  lda cas_b
+  sta csd
+  rts
+
+; A * Y (both 0..255) -> A = high byte, qlo = low byte. Quarter squares: ab = (a+b)^2/4 - (a-b)^2/4.
+qmul:
+  sta qa
+  sty qb
+  sec
+  sbc qb
+  bcs :+
+  eor #$FF
+  adc #1
+: tay                    ; |a - b|
+  lda qa
+  clc
+  adc qb
+  tax
+  bcs @hi
+  lda QS_LO,x
+  sec
+  sbc QS_LO,y
+  sta qlo
+  lda QS_HI,x
+  sbc QS_HI,y
+  rts
+@hi:
+  lda QS_LO+256,x
+  sec
+  sbc QS_LO,y
+  sta qlo
+  lda QS_HI+256,x
+  sbc QS_HI,y
+  rts
+
+QS_LO:
+.repeat 512, i
+  .byte <((i * i) / 4)
+.endrep
+QS_HI:
+.repeat 512, i
+  .byte >((i * i) / 4)
+.endrep
 
 ; ------------------------------------------------------------------ obstacles under the camera shear
 ; newrec is the footprint on the nominal tunnel. The picture is scrolled per band (calc_bands), so the
@@ -2762,12 +3176,7 @@ shear_rec:
   lda newrec+2
   bne :+
   rts                    ; empty footprint: nothing to move
-: ldx #63
-  lda #0
-: sta tsp,x
-  dex
-  bpl :-
-  lda newrec+1
+: lda newrec+1           ; (tsp is only read for rows the footprint covers, which are written first)
   sta sh_r0
   lda newrec+2
   sta sh_n
@@ -2845,7 +3254,9 @@ shear_rec:
   cmp #$80
   ror a
   sta sh_fq
-  lda nbx,y
+  ldy sh_d
+  ldx rowev,y            ; this screen row's sideways shift in tiles
+  lda ev_x,x
   clc
   adc #4
   cmp #$80

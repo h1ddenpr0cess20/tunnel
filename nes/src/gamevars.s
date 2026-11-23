@@ -86,22 +86,59 @@ oldrec:  .res 192        ; per slot: what is drawn on screen (64 bytes each)
 newrec:  .res 64
 lightbuf: .res 6
 fdig:    .res 4
-iseq:    .res 1          ; IRQ sequence number (band)
+iseq:    .res 1          ; IRQ: index of the next scroll list entry
 ix:      .res 1
-bsx:     .res 8          ; per band, as the IRQ uses them: X scroll, nametable bits, Y scroll, low v byte, lines to the next band
-bsn:     .res 8
-bsy:     .res 8
-bso:     .res 8
-bsl:     .res 8
-nbx:     .res 8          ; next frame's values, copied in the NMI
-nbn:     .res 8
-nby:     .res 8
-nbo:     .res 8
-nbl:     .res 8
-nbf:     .res 8
-nbs:     .res 8          ; first screen line of each band          ; per band vertical shift (pixels the picture moves up)
+; The scroll list: one entry per IRQ (screen line, bank switch flag, scroll). Two buffers of EVN
+; entries; the main loop fills one while the IRQ reads the other. ev_n/ev_y/ev_x share the page
+; the sprite buffer used to have (sprites are off).
+EVN = 36
+ev_n = oam              ; $2006 high byte (nametable); bit 7: switch the tile bank, bit 6: last
+ev_y = oam + 2 * EVN    ; Y scroll (source line)
+ev_x = oam + 4 * EVN    ; X scroll
+ev_o:    .res 2 * EVN   ; $2006 low byte
+ev_l:    .res 2 * EVN   ; lines to the next entry minus one
+efront:  .res 1         ; buffer the IRQ reads
+epend:   .res 1         ; buffer ready for the next frame ($FF: none)
+eb:      .res 1
+ei:      .res 1
+rowev:   .res 30        ; per screen tile row: the scroll list entry that shows it, for the obstacles
+nbf:     .res 8          ; per band: vertical shift (pixels the picture moves up)
+nby:     .res 8          ; per band: first source line
+nbs:     .res 8          ; per band: first screen line
+cmag:    .res 1
+csgn:    .res 1
+cam_a:   .res 1          ; |x - roll| and sign (above the horizon), |x + roll| and sign (below)
+cas_a:   .res 1
+cam_b:   .res 1
+cas_b:   .res 1
+cnt_:    .res 1
+cb:      .res 1
+cl:      .res 1
+cs:      .res 1
+ce:      .res 1
+cd:      .res 1
+qa:      .res 1
+qb:      .res 1
+qlo:     .res 1
+qt:      .res 1
+qy:      .res 1
+cside:   .res 1          ; strip: $FF above the horizon
+csd:     .res 1          ; strip: sign of the shift
+cwd:     .res 1          ; strip: lines from the horizon
+acl:     .res 1          ; strip: |A| * w
+ach:     .res 1
+stl_a:   .res 1          ; |A| * 8 above and below
+sth_a:   .res 1
+stl_b:   .res 1
+sth_b:   .res 1
+cpx_:    .res 1          ; last X scroll written
+cpl:     .res 1          ; its screen line
+cctl:    .res 1
+ccnt:    .res 1          ; strips in this band after its first entry
+ctmp:    .res 1
+crow:    .res 1
+ckey:    .res 13         ; what the last scroll list was built from: x, roll, shake, ctrl, vertical shifts
 bph:     .res 1          ; head bob phase
-bpar:    .res 1
 cdxl:    .res 1          ; camera x, y (8.8) and roll
 cdxh:    .res 1
 cdyl:    .res 1

@@ -330,6 +330,12 @@ put(t1, 1, 1, 'RUN 000000 M')
 put(t1, 1, 15, 'TO LIGHT')
 put(t1, 1, 31, 'M')
 t2, a2 = nametable()          # the second nametable while playing: it carries the status line (row 28)
+# The camera scrolls rows sideways, so the screen edges show slivers of this nametable: continue the
+# nearest wall there (its left half follows the play picture's right edge, its right half the left edge).
+for r in range(2, 28):
+    for c in range(32): t2[r][c] = (r % 4) * 32 + (31 if c < 16 else 0)
+for br in range(1, 14):
+    for bc in range(16): a2[br][bc] = int(blk_pal[br - 1][15 if bc < 8 else 0])
 # The play nametable keeps tunnel tiles in rows 28-29: the camera's vertical shear can scroll them into view.
 for r in (28, 29):
     for c in range(32): t1[r][c] = (r % 4) * 32 + c
