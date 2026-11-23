@@ -82,10 +82,19 @@ o_seen:  .res 3
 .segment "BSS2"
 oldrec:  .res 192        ; per slot: what is drawn on screen (64 bytes each)
 newrec:  .res 64
+pendrec: .res 192       ; per slot: the target of a redraw that is split over frames
+rowev:   .res 30        ; per screen tile row: the scroll list entry that shows it, for the obstacles
+cwl:     .res 1          ; camera x for the obstacles
+cwh:     .res 1
+crow:    .res 1
+cey_l:   .res 1          ; eye height the obstacle being built is seen from
+cey_h:   .res 1
 lightbuf: .res 6
 fdig:    .res 4
 iseq:    .res 1          ; IRQ: index of the next scroll list entry
 ix:      .res 1
+iy:      .res 1
+ifx:     .res 1          ; IRQ: fine X currently in use
 ; The scroll list: one entry per IRQ (screen line, bank switch flag, scroll). Two buffers of EVN
 ; entries; the main loop fills one while the IRQ reads the other. ev_n/ev_y/ev_x share the page
 ; the sprite buffer used to have (sprites are off).
@@ -133,6 +142,9 @@ cpl:     .res 1          ; its screen line
 cctl:    .res 1
 ccnt:    .res 1          ; strips in this band after its first entry
 ctmp:    .res 1
+vok:     .res 1
+rbud:    .res 1          ; obstacle rows left to redraw this frame
+vkey:    .res 5          ; what the vertical bands were last computed from
 ckey:    .res 13         ; what the last scroll list was built from: x, roll, shake, ctrl, vertical shifts
 bph:     .res 1          ; head bob phase
 cdxl:    .res 1          ; camera x, y (8.8) and roll
@@ -142,3 +154,19 @@ cdyh:    .res 1
 crll:    .res 1
 crlh:    .res 1
 ctx:     .res 1
+
+.segment "BSS"
+tsp:     .res 64         ; shear_rec scratch: footprint columns by row
+sh_r0:   .res 1
+sh_n:    .res 1
+sh_cls:  .res 1
+sh_flag: .res 1
+sh_c0:   .res 1
+sh_c1:   .res 1
+sh_lo:   .res 1
+sh_hi:   .res 1
+sh_d:    .res 1
+sh_fq:   .res 1
+sh_sh:   .res 1
+sh_t:    .res 1
+sh_o:    .res 1

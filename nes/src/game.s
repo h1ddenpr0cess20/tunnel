@@ -542,7 +542,11 @@ game_update:
   bne :+
   lda #1
   sta wh_dirty
-:
+: ; camera for the obstacles
+  lda xl                 ; obstacles are projected from the real camera (their sides stay upright);
+  sta cwl                ; shear_rec then undoes the row scroll the picture is about to be moved by
+  lda xh
+  sta cwh
 @ret:
   rts
 
@@ -1881,7 +1885,10 @@ dying_update:
 ; Each frame the footprint of every obstacle is projected like the shader does it (columns from
 ; the lane edges and the camera, rows from the heights, all scaled by 1/z) and compared with what
 ; is drawn. Differences are streamed to the PPU through the queue.
+ROW_BUDGET = 10
 draw_obstacles:
+  lda #ROW_BUDGET        ; rows redrawn per frame, all slots together: bounds the frame's work
+  sta rbud
   lda #0
   sta slot
 @l:
@@ -1903,9 +1910,20 @@ update_slot:
   beq @go
   rts
 @go:
-  lda o_type,x
+  lda o_prog,x           ; a redraw split over frames keeps its target: the rows already sent were
+  beq :+                 ; drawn for it, and only that target is recorded as on screen at the end
+  jsr pend_ptr
+  ldy #63
+@cp:
+  lda (ptr),y
+  sta newrec,y
+  dey
+  bpl @cp
+  jmp @have
+: lda o_type,x
   beq @gone
   jsr build_new
+  jsr shear_rec
   jmp @have
 @gone:
   lda o_ds,x
@@ -1987,6 +2005,8 @@ update_slot:
   lda rr
   cmp rmax
   bcs @finish
+  dec rbud
+  bmi @defer
   jsr do_row
   bcs @defer
   inc rr
@@ -1995,6 +2015,12 @@ update_slot:
   ldx t3
   lda rr
   sta o_prog,x
+  jsr pend_ptr           ; remember the target for the next frames
+  ldy #63
+: lda newrec,y
+  sta (ptr),y
+  dey
+  bpl :-
   rts
 @finish:
   ldx t3
@@ -2021,13 +2047,31 @@ update_slot:
   cpy t1
   bne :-
   ldx t3
-  lda o_type,x
+  lda newrec+2           ; nothing drawn (an erased obstacle): the slot is free; anything else, even a
+  bne :+                 ; gone obstacle whose split redraw just finished, is on screen and gets erased
+  lda o_type,x           ; on its next update
   bne :+
   lda #$FF
   sta o_ds,x
   rts
 : lda #0
   sta o_ds,x
+  rts
+
+pend_ptr:                  ; ptr = pendrec + slot * 64
+  lda t3
+  asl a
+  asl a
+  asl a
+  asl a
+  asl a
+  asl a
+  clc
+  adc #<pendrec
+  sta ptr
+  lda #>pendrec
+  adc #0
+  sta ptr+1
   rts
 
 old_ptr:                   ; ptr = oldrec + slot * 64
@@ -2200,30 +2244,49 @@ load_scy:
   sta mBh
   rts
 
-; column of an edge at scale idx X: edge in (gt3:gt2). Obstacles are drawn into the nominal (centred)
-; picture: the camera's scroll moves them together with the tunnel around them.
+; column of (edge - camera) at scale idx X: edge in (gt3:gt2)
 proj_col:
+  sec
   lda gt2
+  sbc cwl
   sta mAl
   lda gt3
+  sbc cwh
   sta mAh
   jsr load_scx
   jsr smulu
   jmp tocol
 
-; row of height (gt3:gt2) at scale idx X
+; row of height (gt3:gt2) at scale idx X, seen from eye height cey (0 except for beams)
 proj_row:
+  sec
   lda gt2
+  sbc cey_l
   sta mAl
   lda gt3
+  sbc cey_h
   sta mAh
   jsr load_scy
   jsr smulu
   jmp torow
 
 ; builds newrec for the obstacle in slot t3
+; Pits, walls and pillars stand on the floor: they are projected from the standing eye so they move up
+; and down with the floor of the picture. A beam is about where your head is, so it is seen from the
+; real eye height (shear_rec then undoes the picture's vertical scroll): slide and it passes overhead.
 build_new:
   ldx t3
+  lda #0
+  sta cey_l
+  sta cey_h
+  lda o_type,x
+  cmp #4
+  bne :+
+  lda eyel
+  sta cey_l
+  lda eyeh
+  sta cey_h
+: ldx t3
   lda o_dl,x
   sta gt0
   lda o_dh,x
@@ -2603,7 +2666,48 @@ calc_bands:
   lda mR2
   sta crlh
 @bands:
-  ; --- vertical: f_b = -(dy * w_b) / 4 per 32-line band (pixels the band's picture moves up)
+  ; --- vertical: f_b = -(dy * w_b) / 4 per 32-line band (pixels the band's picture moves up);
+  ; only when its inputs changed (a lane change, for one, leaves them alone)
+  ldy #0
+  lda cdyl
+  cmp vkey+0
+  beq :+
+  sta vkey+0
+  iny
+:
+  lda cdyh
+  cmp vkey+1
+  beq :+
+  sta vkey+1
+  iny
+:
+  lda state
+  cmp vkey+2
+  beq :+
+  sta vkey+2
+  iny
+:
+  lda deadt
+  cmp vkey+3
+  beq :+
+  sta vkey+3
+  iny
+:
+  lda kind
+  cmp vkey+4
+  beq :+
+  sta vkey+4
+  iny
+:
+  lda vok                ; (never computed yet: RAM starts out equal to the inputs)
+  bne :+
+  iny
+  sta vok
+  inc vok
+: tya
+  bne :+
+  jmp @lateral
+:
   ldy #0                 ; dy magnitude and sign
   lda cdyl
   ldx cdyh
@@ -2724,6 +2828,7 @@ calc_bands:
   inx
   cpx #8
   bne @s
+@lateral:
   ; --- sideways shift per screen line: a floor or ceiling row w lines from the horizon moves by
   ; (x -/+ roll) * w, above / below the horizon. |x -/+ roll| < 1, kept as magnitude and sign.
   sec
@@ -2852,6 +2957,10 @@ calc_bands:
   rts
 : lda #$FF
   sta epend
+  ldy #29                ; rows the strips below do not mark take the entry above them (see the end)
+: sta rowev,y
+  dey
+  bpl :-
   lda efront
   eor #EVN
   sta eb
@@ -2901,9 +3010,7 @@ calc_bands:
   lsr a
   lsr a
   sta ctx
-  ldy cs                 ; the write lands before this line's Y increment: one line early
-  dey
-  tya
+  lda cs
   sta ev_y,x
   and #$38
   asl a
@@ -2919,6 +3026,16 @@ calc_bands:
   sta ev_n,x
   lda #7
   sta ev_l,x
+  lda cl                 ; the tile rows at the middle of each strip, for the obstacles
+  clc
+  adc #4
+  lsr a
+  lsr a
+  lsr a
+  tay
+  txa
+  sta rowev,y
+  iny
   inx
   lda ccnt
   sta ctmp
@@ -2941,6 +3058,7 @@ calc_bands:
   jmp @hv
 @cr:
   stx ei                 ; crossing the horizon: below it, 8 - w lines from it
+  sty crow
   lda #8
   sec
   sbc cwd
@@ -2955,6 +3073,7 @@ calc_bands:
   lda #0
   sta cside
   ldx ei
+  ldy crow
   jmp @hv
 @dn:
   clc
@@ -2985,6 +3104,9 @@ calc_bands:
   sta ev_n,x
   lda #7
   sta ev_l,x
+  txa
+  sta rowev,y
+  iny
   inx
   dec ctmp
   beq @bend
@@ -3007,14 +3129,14 @@ calc_bands:
   lda nbs+7
   sta cl
   jsr @fix
-  lda #223               ; line 224, one early (see above)
+  lda #224
   sta ev_y,x
   lda sx
   sta ev_x,x
   lsr a
   lsr a
   lsr a
-  ora #$60               ; (223 & $38) << 2
+  ora #$80               ; (224 & $38) << 2
   sta ev_o,x
   lda #$C0               ; bank switch, last
   ldy sx
@@ -3023,6 +3145,15 @@ calc_bands:
 : sta ev_n,x
   lda #0                 ; no IRQ after the last entry
   sta ev_l,x
+  ldy #2                 ; every tile row needs this list's entry: fill the gaps at band joints
+  lda eb
+: ldx rowev,y
+  bmi :+
+  txa                    ; a marked row: the running entry
+: sta rowev,y
+  iny
+  cpy #30
+  bne :--
   lda eb
   sta epend              ; ready: the NMI may hand it to the IRQ
   rts
@@ -3149,3 +3280,178 @@ QS_HI:
   .byte >((i * i) / 4)
 .endrep
 
+; ------------------------------------------------------------------ obstacles under the camera shear
+; newrec is the footprint seen from the camera. The picture is scrolled sideways row by row (calc_bands),
+; so the tiles must be drawn where that scroll will carry them onto the right place: row D of the screen
+; shows column + sh. Without this a pillar would shear with the floor, bend, and stay in view when you
+; move away from it. Rewrites newrec as a per-row list in drawn coordinates.
+shear_rec:
+  lda newrec+2
+  bne :+
+  rts                    ; empty footprint: nothing to move
+: lda newrec+1           ; (tsp is only read for rows the footprint covers, which are written first)
+  sta sh_r0
+  lda newrec+2
+  sta sh_n
+  lda newrec
+  and #$7F
+  sta sh_cls
+  lda newrec
+  and #$80
+  sta sh_flag
+  ldx #0
+@ex:
+  cpx sh_n
+  bcs @exd
+  lda sh_flag
+  beq @rect
+  txa
+  asl a
+  tay
+  lda newrec+3,y
+  sta sh_c0
+  lda newrec+4,y
+  sta sh_c1
+  jmp @st
+@rect:
+  lda newrec+3
+  sta sh_c0
+  lda newrec+4
+  sta sh_c1
+@st:
+  txa
+  clc
+  adc sh_r0
+  asl a
+  tay
+  lda sh_c0
+  sta tsp,y
+  lda sh_c1
+  sta tsp+1,y
+  inx
+  jmp @ex
+@exd:
+  lda sh_r0
+  cmp #4
+  bcs :+
+  lda #4
+: sec
+  sbc #2
+  sta sh_lo
+  lda sh_r0
+  clc
+  adc sh_n
+  clc
+  adc #2
+  cmp #29
+  bcc :+
+  lda #29
+: sta sh_hi
+  lda #0
+  sta sh_o
+  ldx #0                 ; floor obstacles move with the picture's vertical band scroll; a beam, seen
+  lda cey_l              ; from the real eye, is lifted by the scroll of the band at its bottom edge,
+  ora cey_h              ; rounded to whole rows, as a whole (per-row offsets would skip or double rows
+  beq @nofq              ; where neighbouring bands round differently)
+  lda sh_r0
+  clc
+  adc sh_n
+  sec
+  sbc #1
+  lsr a
+  lsr a
+  tay
+  lda nbf,y
+  clc
+  adc #4
+  cmp #$80
+  ror a
+  cmp #$80
+  ror a
+  cmp #$80
+  ror a
+  tax
+@nofq:
+  stx sh_fq
+  lda sh_lo
+  sta sh_d
+@d:
+  lda sh_d
+  cmp sh_hi
+  bcc :+
+  jmp @done
+: ldy sh_d
+  ldx rowev,y            ; this screen row's sideways shift in tiles
+  lda ev_x,x
+  clc
+  adc #4
+  cmp #$80
+  ror a
+  cmp #$80
+  ror a
+  cmp #$80
+  ror a
+  sta sh_sh
+  lda sh_d
+  sec
+  sbc sh_fq
+  sta sh_t
+  cmp sh_r0
+  bcc @none
+  sec
+  sbc sh_r0
+  cmp sh_n
+  bcs @none
+  lda sh_t
+  asl a
+  tay
+  lda tsp,y
+  clc
+  adc sh_sh
+  jsr @clamp
+  sta sh_c0
+  lda sh_t
+  asl a
+  tay
+  lda tsp+1,y
+  clc
+  adc sh_sh
+  jsr @clamp
+  sta sh_c1
+  jmp @put
+@none:
+  lda #0
+  sta sh_c0
+  sta sh_c1
+@put:
+  ldy sh_o
+  lda sh_c0
+  sta newrec+3,y
+  lda sh_c1
+  sta newrec+4,y
+  iny
+  iny
+  sty sh_o
+  inc sh_d
+  jmp @d
+@done:
+  lda sh_cls
+  ora #$80
+  sta newrec
+  lda sh_lo
+  sta newrec+1
+  lda sh_hi
+  sec
+  sbc sh_lo
+  sta newrec+2
+  rts
+@clamp:                  ; A signed -> 0..32
+  bmi @c0
+  cmp #33
+  bcc @cr
+  lda #32
+@cr:
+  rts
+@c0:
+  lda #0
+  rts

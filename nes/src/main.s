@@ -530,7 +530,8 @@ nmi:
 
 IRQ_FIRST = 15             ; the HUD rows stay still; the camera scroll starts below them
 IRQ_LATCH = 31
-BANK_DELAY = 3            ; IRQ busy-wait (5 cycles per step) so the bank write lands in hblank
+BANK_DELAY = 2            ; IRQ busy-waits (5 cycles per step) so the bank and fine X writes land in hblank
+FINE_DELAY = 3
 
 set_banks:                 ; vblank: pick this frame's tunnel state, arm the band IRQ
   lda #0
@@ -546,6 +547,9 @@ set_banks:                 ; vblank: pick this frame's tunnel state, arm the ban
   sta epend
 : lda efront
   sta iseq
+  lda sx                 ; the fine X the HUD rows start with
+  and #7
+  sta ifx
   sta $E000              ; acknowledge / disable
   lda #IRQ_FIRST
   sta $C000
@@ -673,43 +677,60 @@ ppu_update:
   rts
 
 irq:                       ; one per scroll list entry: full scroll and tile bank at band starts, else X only
-  sta ia                 ; (the writes land late on the line before the entry's line, before the PPU's
-  stx ix                 ; end-of-line Y increment, so the full entries hold their source line minus one)
-  ldx iseq
+  sta ia                 ; The IRQ lands late on the line before the entry's line. Before the end of that
+  stx ix                 ; line only t (the PPU's next address) changes, and coarse X with the old fine X;
+  sty iy                 ; in hblank: the address itself, the tile bank and the new fine X. So no line
+  ldx iseq               ; is drawn half old, half new.
   inc iseq
   lda ev_n,x
   bpl @xonly
   lda busy               ; the main loop is writing VRAM with rendering off: leave the PPU alone
-  bne :+
-  bit PPUSTAT            ; mid-frame scroll: nametable, Y, X, then the low address byte loads v
+  bne @fbusy
+  bit PPUSTAT            ; t: nametable, Y, X (old fine X)
   lda ev_n,x
   sta PPUADDR
   lda ev_y,x
   sta PPUSCRL
   lda ev_x,x
+  and #$F8
+  ora ifx
   sta PPUSCRL
-  lda ev_o,x
-  sta PPUADDR
-: sta $E000              ; acknowledge
+  sta $E000              ; acknowledge
   sta $E001              ; re-arm
   lda ev_l,x             ; lines until the next entry, minus one
   sta $C000
   sta $C001
-  ldx #BANK_DELAY        ; the tile bank switches in hblank, after this line's last fetches
-: dex
+  ldy #BANK_DELAY        ; wait for hblank
+: dey
   bne :-
+  ldy ev_x,x
+  lda ev_o,x
+  ldx ibank
+  sta PPUADDR            ; hblank: v = t (the next line starts at the entry's source line) ...
+  stx $8001              ; ... its tile bank (the first IRQ rewrites band 0) ...
+  sty PPUSCRL            ; ... and the new fine X
+  tya
+  and #7
+  sta ifx
+@fnext:
+  inx
+  inx
+  stx ibank
   ldx iseq
-  dex
-  lda ibank
-  sta $8001              ; (the first IRQ rewrites band 0)
-  clc
-  adc #2
-  sta ibank
-  lda ev_n,x
+  lda ev_n-1,x
   and #$40
   beq @r
   sta $E000              ; last entry: no more IRQs this frame
   bne @r
+@fbusy:
+  sta $E000
+  sta $E001
+  lda ev_l,x
+  sta $C000
+  sta $C001
+  ldx ibank
+  stx $8001
+  jmp @fnext
 @xonly:                    ; coarse X and the nametable bit reach v at the end of this line
   sta $E000
   sta $E001
@@ -723,8 +744,21 @@ irq:                       ; one per scroll list entry: full scroll and tile ban
   ora #$80
   sta PPUCTRL
   lda ev_x,x
+  and #$F8
+  ora ifx
   sta PPUSCRL
+  ldx #FINE_DELAY
+: dex
+  bne :-
+  ldx iseq
+  dex
+  bit PPUSTAT            ; hblank: the new fine X
+  lda ev_x,x
+  sta PPUSCRL
+  and #7
+  sta ifx
 @r:
+  ldy iy
   ldx ix
   lda ia
   rti
