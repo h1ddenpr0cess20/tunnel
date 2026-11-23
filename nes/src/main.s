@@ -41,16 +41,9 @@ state: .res 1          ; 0 title, 1 run, 2 dying, 3 game over
 paused: .res 1
 lane: .res 1
 cam: .res 1
-jt: .res 1
 slt: .res 1
-cyy: .res 1
-hh: .res 1
-spd: .res 1
 facc: .res 1
-tick8: .res 1
 cycle: .res 1
-theme: .res 1
-ftick: .res 1
 rnd: .res 1
 digits: .res 6
 best: .res 6
@@ -58,21 +51,12 @@ o_type: .res 3
 o_lane: .res 3
 o_dl: .res 3
 o_dh: .res 3
-o_chk: .res 3
-spn_l: .res 1
-spn_h: .res 1
 fade: .res 1
 fadet: .res 1
 shake: .res 1
 flash: .res 1
 deadt: .res 1
 kind: .res 1
-oi: .res 1
-stg: .res 1
-bx: .res 1
-by: .res 1
-cnt: .res 1
-dyv: .res 1
 wh_i: .res 1
 wh_t: .res 1
 frame: .res 1
@@ -91,10 +75,6 @@ o_dc: .res 3           ; drawn camera position
 o_dty: .res 3          ; drawn type / lane (an obstacle may be gone before it is erased)
 o_dla: .res 3
 o_prog: .res 3         ; row to resume a partly sent redraw at
-gtype: .res 1
-gcam: .res 1
-glane: .res 1
-gstage: .res 1
 sr0: .res 2
 sn: .res 2
 scls: .res 1
@@ -117,7 +97,6 @@ hsh: .res 1
 tbase: .res 1
 spc0: .res 1
 spc1: .res 1
-tyv: .res 1
 np: .res 2
 nt0: .res 1
 nt1: .res 1
@@ -151,6 +130,8 @@ sn_first: .res 1
 
 .segment "OAM"
 oam: .res 256
+
+.include "gamevars.s"
 
 .segment "QUEUE"
 qbuf: .res 256
@@ -570,7 +551,7 @@ ppu_update:
   sta hud_dirty
   lda #$24
   sta PPUADDR
-  lda #$26
+  lda #$25
   sta PPUADDR
   ldx #5
 : lda digits,x
@@ -581,15 +562,14 @@ ppu_update:
   bpl :-
   lda #$24
   sta PPUADDR
-  lda #$37
+  lda #$38
   sta PPUADDR
-  ldx #5
-: lda best,x
-  clc
-  adc #$D0
+  ldx #0
+: lda lightbuf,x
   sta PPUDATA
-  dex
-  bpl :-
+  inx
+  cpx #6
+  bne :-
 @nohud:
   lda wh_dirty
   beq @nowh
@@ -597,15 +577,15 @@ ppu_update:
   sta wh_dirty
   lda #$27
   sta PPUADDR
-  lda #$84
+  lda #$80
   sta PPUADDR
-  ldx #9
+  ldx #10
   lda wh_t
   beq :+
   ldx wh_i
 : lda paused
   beq :+
-  ldx #8
+  ldx #11
 : lda #<STR_WHISPER
   sta np
   lda #>STR_WHISPER
@@ -614,7 +594,7 @@ ppu_update:
   beq @go
 : lda np
   clc
-  adc #24
+  adc #32
   sta np
   bcc :+
   inc np+1
@@ -625,7 +605,7 @@ ppu_update:
 : lda (np),y
   sta PPUDATA
   iny
-  cpy #24
+  cpy #32
   bne :-
 @nowh:
   ; drain the tile queue: runs of (addr hi, addr lo, length, tiles...)
@@ -687,560 +667,6 @@ irq:                       ; every 32 scanlines: next band of tunnel tiles. The 
   lda ia
   rti
 
-; ------------------------------------------------------------------ game flow
-go_title:
-  lda #0
-  sta state
-  sta fade
-  sta shake
-  sta flash
-  sta jt
-  sta slt
-  lda #2
-  sta cam
-  lda #6
-  sta cyy
-  lda #50
-  sta spd
-  lda #0
-  jsr music_start
-  rts
-
-start_game:
-  lda #1
-  sta state
-  lda #0
-  ldx #5
-: sta digits,x
-  dex
-  bpl :-
-  sta paused
-  sta jt
-  sta slt
-  sta fade
-  sta fadet
-  sta shake
-  sta flash
-  sta wh_t
-  sta wh_i
-  sta ftick
-  sta facc
-  sta theme
-  ldx #2
-: sta o_type,x
-  dex
-  bpl :-
-  lda #1
-  sta lane
-  lda #2
-  sta cam
-  lda #6
-  sta cyy
-  lda #120
-  sta spd
-  lda #$00
-  sta spn_l
-  lda #$30
-  sta spn_h
-  ldx #2
-  lda #$FF
-: sta o_ds,x
-  dex
-  bpl :-
-  lda #0
-  sta o_prog
-  sta o_prog+1
-  sta o_prog+2
-  jsr reload_nt1
-  lda #1
-  sta hud_dirty
-  sta wh_dirty
-  lda ctrl
-  ora #1
-  sta ctrl
-  lda frame
-  eor rnd
-  ora #1
-  sta rnd
-  lda #1
-  jsr music_start
-  lda #6
-  jsr sfx_play
-  rts
-
-reload_nt1:                ; forget any obstacle tiles left in the play nametable
-  lda #1
-  sta busy
-  lda #0
-  sta PPUMASK
-  lda PPUSTAT
-  lda #$24
-  sta PPUADDR
-  lda #$00
-  sta PPUADDR
-  lda #<NT1
-  sta ptr
-  lda #>NT1
-  sta ptr+1
-  jsr copy_nt
-  lda #0
-  sta q_rd
-  sta q_wr
-  sta busy
-  rts
-
-toggle_pause:
-  lda paused
-  eor #1
-  sta paused
-  lda #1
-  sta wh_dirty
-  lda paused
-  beq @unp
-  lda #0
-  sta mus_on
-  sta $4015
-  rts
-@unp:
-  lda #1
-  sta mus_on
-  lda #$0F
-  sta $4015
-  ldx #3
-  lda #$FF
-: sta m_lh,x
-  dex
-  bpl :-
-  rts
-
-; ------------------------------------------------------------------ simulation
-game_update:
-  ; speed ramp
-  inc ftick
-  bne :+
-  lda spd
-  cmp #230
-  bcs :+
-  clc
-  adc #4
-  sta spd
-: lda spd
-  lsr a
-  sta t0
-  ; distance
-  clc
-  lda facc
-  adc t0
-  sta facc
-  bcc :+
-  jsr inc_dist
-: jsr advance_tunnel
-  ; input
-  lda padn
-  and #BTN_LEFT
-  beq :+
-  lda lane
-  beq :+
-  dec lane
-  lda #2
-  jsr sfx_play
-: lda padn
-  and #BTN_RIGHT
-  beq :+
-  lda lane
-  cmp #2
-  bcs :+
-  inc lane
-  lda #2
-  jsr sfx_play
-: lda padn
-  and #(BTN_A | BTN_UP)
-  beq :+
-  lda jt
-  bne :+
-  lda #1
-  sta jt
-  lda #0
-  sta slt
-  jsr sfx_play        ; A=0 jump
-: lda padn
-  and #(BTN_B | BTN_DOWN)
-  beq :+
-  lda jt
-  bne :+
-  lda slt
-  bne :+
-  lda #26
-  sta slt
-  lda #1
-  jsr sfx_play
-: ; jump arc
-  lda jt
-  beq @nojump
-  inc jt
-  lda jt
-  cmp #28
-  bcc :+
-  lda #0
-  sta jt
-  lda #3
-  jsr sfx_play
-: ldx jt
-  lda JUMPH,x
-  jmp @sethh
-@nojump:
-  lda #0
-@sethh:
-  sta hh
-  clc
-  adc #6
-  sta cyy
-  lda slt
-  beq :+
-  dec slt
-  lda #1
-  sta cyy
-: ; camera follows lane (quarter-lane steps)
-  lda frame
-  and #1
-  bne @camdone
-  lda lane
-  asl a
-  cmp cam
-  beq @camdone
-  bcc @camdn
-  inc cam
-  jmp @camdone
-@camdn:
-  dec cam
-@camdone:
-  ; theme follows hundreds digit
-  lda digits+2
-@th:
-  cmp #6
-  bcc :+
-  sbc #6
-  jmp @th
-: sta theme
-  ; whisper timer
-  lda wh_t
-  beq :+
-  dec wh_t
-  bne :+
-  lda #1
-  sta wh_dirty
-: ; obstacles
-  ldx #2
-@ob:
-  lda o_type,x
-  beq @obnext
-  lda o_dl,x
-  sec
-  sbc spd
-  sta o_dl,x
-  lda o_dh,x
-  sbc #0
-  sta o_dh,x
-  bcs :+
-  lda #0
-  sta o_type,x
-  beq @obnext
-: lda o_chk,x
-  bne @obnext
-  lda o_dh,x
-  cmp #6
-  bcs @obnext
-  lda #1
-  sta o_chk,x
-  jsr check_hit
-@obnext:
-  dex
-  bpl @ob
-  lda state
-  cmp #1
-  bne @ret
-  ; spawn
-  lda spn_l
-  sec
-  sbc spd
-  sta spn_l
-  lda spn_h
-  sbc #0
-  sta spn_h
-  bcs @ret
-  jsr spawn
-@ret:
-  rts
-
-inc_dist:
-  lda #1
-  sta hud_dirty
-  ldx #0
-: inc digits,x
-  lda digits,x
-  cmp #10
-  bcc @done
-  lda #0
-  sta digits,x
-  inx
-  cpx #6
-  bcc :-
-  rts
-@done:
-  ; every 100 m a whisper
-  cpx #2
-  bne :+
-  lda wh_i
-  clc
-  adc #1
-  and #7
-  sta wh_i
-  lda #200
-  sta wh_t
-  lda #1
-  sta wh_dirty
-: rts
-
-; spawn an obstacle (and sometimes a second one in another lane)
-spawn:
-  jsr rand
-  and #3
-  sta t0                  ; type 0..3
-  jsr rand
-  sta t1
-  and #$7F
-  tay
-: cpy #3
-  bcc :+
-  tya
-  sec
-  sbc #3
-  tay
-  jmp :-
-: sty t2                  ; lane 0..2
-  jsr add_obstacle
-  ; a second obstacle once past 1000 m ... or 100 m
-  lda digits+2
-  ora digits+3
-  beq @gap
-  lda t1
-  bpl @gap
-  jsr rand
-  and #3
-  sta t0
-  lda t2
-  clc
-  adc #1
-  ldx t1
-  cpx #$C0
-  bcc :+
-  adc #0                  ; skip one more lane
-: cmp #3
-  bcc :+
-  sbc #3
-  cmp #3
-  bcc :+
-  sbc #3
-: sta t2
-  jsr add_obstacle
-@gap:
-  jsr rand
-  lda rnd
-  lsr a
-  lsr a
-  lsr a
-  lsr a                   ; 0..15 (x 256)
-  clc
-  adc #$14
-  sta spn_h
-  lda spd                 ; plus speed * 32
-  asl a
-  asl a
-  asl a
-  asl a
-  asl a
-  sta spn_l
-  lda spd
-  lsr a
-  lsr a
-  lsr a
-  clc
-  adc spn_h
-  sta spn_h
-  rts
-
-add_obstacle:
-  ldx #2
-: lda o_type,x
-  beq @free
-  dex
-  bpl :-
-  rts
-@free:
-  lda t0
-  clc
-  adc #1
-  sta o_type,x
-  lda t2
-  sta o_lane,x
-  lda #0
-  sta o_dl,x
-  sta o_chk,x
-  sta o_prog,x
-  lda #$FF
-  sta o_ds,x
-  lda #63
-  sta o_dh,x
-  rts
-
-; X = obstacle slot; decides whether the runner survives it
-check_hit:
-  lda o_lane,x
-  cmp lane
-  bne @safe
-  lda o_type,x
-  cmp #1
-  beq @pit
-  cmp #2
-  beq @pillar
-  cmp #3
-  beq @wall
-  ; beam: need to be sliding
-  lda slt
-  bne @safe
-  lda #2
-  jmp die
-@pit:
-  lda hh
-  cmp #2
-  bcs @safe
-  lda #0
-  jmp die
-@pillar:
-  lda #3
-  jmp die
-@wall:
-  lda hh
-  cmp #5
-  bcs @safe
-  lda #1
-  jmp die
-@safe:
-  rts
-
-; A = kind (0 fell, 1 tripped, 2 hit head, 3 pillar)
-die:
-  sta kind
-  stx t3
-  lda #2
-  sta state
-  lda #0
-  sta deadt
-  sta fadet
-  lda kind
-  bne @crash
-  lda #5
-  jsr sfx_play
-  lda #1
-  sta fade
-  jmp @mus
-@crash:
-  lda #4
-  jsr sfx_play
-  lda #5
-  sta flash
-  lda #24
-  sta shake
-@mus:
-  lda #2
-  jsr music_start
-  ldx t3
-  rts
-
-dying_update:
-  inc deadt
-  lda frame
-  and #7
-  bne :+
-  lsr spd
-: lda flash
-  beq :+
-  dec flash
-: lda shake
-  beq :+
-  dec shake
-: lda kind
-  bne @nofade
-  ; fall: sink and fade out
-  lda #2
-  sta cyy
-  lda deadt
-  and #15
-  bne :+
-  lda fade
-  cmp #4
-  bcs :+
-  inc fade
-: jmp @obs
-@nofade:
-  lda deadt
-  cmp #40
-  bcc @obs
-  and #15
-  bne @obs
-  lda fade
-  cmp #3
-  bcs @obs
-  inc fade
-@obs:
-  ; obstacles keep approaching, slowly
-  ldx #2
-: lda o_type,x
-  beq :+
-  lda o_dl,x
-  sec
-  sbc spd
-  sta o_dl,x
-  lda o_dh,x
-  sbc #0
-  sta o_dh,x
-  bcs :+
-  lda #0
-  sta o_type,x
-: dex
-  bpl :--
-  lda deadt
-  cmp #110
-  bcc @r
-  ; compare against best
-  ldx #5
-: lda digits,x
-  cmp best,x
-  bcc @nobest
-  bne @newbest
-  dex
-  bpl :-
-  jmp @nobest
-@newbest:
-  ldx #5
-: lda digits,x
-  sta best,x
-  dex
-  bpl :-
-@nobest:
-  lda #3
-  sta state
-  lda ctrl
-  and #$FE
-  sta ctrl
-  lda #0
-  sta fade
-  sta shake
-  sta flash
-  jsr show_over
-@r:
-  rts
-
 ; ------------------------------------------------------------------ visuals
 tunnel_anim:               ; the tunnel keeps flowing on the title screen
   lda state
@@ -1249,25 +675,46 @@ tunnel_anim:               ; the tunnel keeps flowing on the title screen
 @r:
   rts
 
-; the tunnel advances spd * 2.125 / 256 rendered states per frame (the original's ring speed)
+; the tunnel advances v * 0.1984 rendered states per frame (1.5 rings per state, v in units/s)
 advance_tunnel:
-  lda spd
-  asl a
+  lda vl
+  sta gt0
+  lda vh_
+  sta gt1
+  ldx #3
+  jsr asr16
+  lda gt0
   sta t1
-  lda #0
-  rol a
+  lda gt1
   sta t2
-  lda spd
-  lsr a
-  lsr a
-  lsr a
+  lda vl
+  sta gt0
+  lda vh_
+  sta gt1
+  ldx #4
+  jsr asr16
   clc
-  adc t1
+  lda t1
+  adc gt0
   sta t1
-  bcc :+
-  inc t2
-: lda tposl
+  lda t2
+  adc gt1
+  sta t2
+  lda vl
+  sta gt0
+  lda vh_
+  sta gt1
+  ldx #7
+  jsr asr16
   clc
+  lda t1
+  adc gt0
+  sta t1
+  lda t2
+  adc gt1
+  sta t2
+  clc
+  lda tposl
   adc t1
   sta tposl
   lda tposh
@@ -1337,228 +784,6 @@ clear_sprites:
   bne :-
   rts
 
-; ------------------------------------------------------------------ obstacles in the nametable
-; Obstacles are tunnel geometry: blocks of tiles drawn into the play nametable at their perspective
-; position and streamed to the PPU through a queue. Footprints are precomputed per
-; (type, camera, lane, depth stage) -- see tools_assets.py.
-draw_obstacles:
-  lda #0
-  sta slot
-@loop:
-  ldx slot
-  jsr update_slot
-  inc slot
-  lda slot
-  cmp #3
-  bne @loop
-  rts
-
-; X = slot
-update_slot:
-  stx t3
-  lda o_type,x
-  beq @gone
-  lda o_dh,x
-  lsr a
-  lsr a
-  sta stg
-  cmp o_ds,x
-  bne @redraw
-  lda cam
-  cmp o_dc,x
-  bne @redraw
-  rts
-@gone:
-  lda o_ds,x
-  cmp #$FF
-  bne @redraw
-  rts
-@redraw:
-  lda o_dty,x            ; set 0 = what is on screen now
-  sta gtype
-  lda o_dla,x
-  sta glane
-  lda o_dc,x
-  sta gcam
-  lda o_ds,x
-  sta gstage
-  ldx #0
-  jsr load_set
-  ldx t3                 ; set 1 = what should be there
-  lda o_type,x
-  beq @none
-  sec
-  sbc #1
-  sta gtype
-  lda o_lane,x
-  sta glane
-  lda cam
-  sta gcam
-  lda stg
-  sta gstage
-  jmp @ld1
-@none:
-  lda #$FF
-  sta gstage
-@ld1:
-  ldx #1
-  jsr load_set
-  lda #255               ; the rows to touch
-  sta rmin
-  lda #0
-  sta rmax
-  ldx #1
-@mm:
-  lda sn,x
-  beq @mnext
-  lda sr0,x
-  cmp rmin
-  bcs :+
-  sta rmin
-: lda sr0,x
-  clc
-  adc sn,x
-  cmp rmax
-  bcc @mnext
-  sta rmax
-@mnext:
-  dex
-  bpl @mm
-  lda rmin
-  cmp rmax
-  bcs @finish
-  ldx t3
-  lda o_prog,x
-  cmp rmin
-  bcs :+
-  lda rmin
-: sta rr
-  lda scls
-  asl a
-  asl a
-  asl a
-  asl a
-  clc
-  adc #128
-  sta tbase
-@row:
-  lda rr
-  cmp rmax
-  bcs @finish
-  jsr do_row
-  bcs @defer
-  inc rr
-  jmp @row
-@defer:                  ; queue full: carry on next frame
-  ldx t3
-  lda rr
-  sta o_prog,x
-  rts
-@finish:
-  ldx t3
-  lda #0
-  sta o_prog,x
-  lda o_type,x
-  bne @keep
-  lda #$FF
-  sta o_ds,x
-  rts
-@keep:
-  sec
-  sbc #1
-  sta o_dty,x
-  lda o_lane,x
-  sta o_dla,x
-  lda cam
-  sta o_dc,x
-  lda stg
-  sta o_ds,x
-  rts
-
-; X = set (0 old / 1 new); uses gtype gcam glane gstage
-load_set:
-  lda gstage
-  cmp #$FF
-  bne :+
-  lda #0
-  sta sn,x
-  sta sr0,x
-  rts
-: stx t2
-  lda gtype
-  asl a
-  asl a
-  clc
-  adc gtype              ; type * 5
-  clc
-  adc gcam
-  sta t0
-  asl a
-  clc
-  adc t0                 ; * 3
-  clc
-  adc glane
-  sta t0                 ; v = (type*5+cam)*3+lane, 0..59
-  lsr a
-  lsr a
-  lsr a
-  lsr a
-  sta t1                 ; high byte of v*16
-  lda t0
-  asl a
-  asl a
-  asl a
-  asl a
-  ora gstage
-  sta t0                 ; low byte of v*16+stage
-  lda #<SPAN_LO
-  clc
-  adc t0
-  sta ptr
-  lda #>SPAN_LO
-  adc t1
-  sta ptr+1
-  ldy #0
-  lda (ptr),y
-  pha
-  lda #<SPAN_HI
-  clc
-  adc t0
-  sta ptr
-  lda #>SPAN_HI
-  adc t1
-  sta ptr+1
-  lda (ptr),y
-  sta ptr+1
-  pla
-  sta ptr                ; ptr -> footprint record
-  ldx t2
-  lda (ptr),y
-  pha
-  and #$7F
-  sta scl2
-  pla
-  and #$80
-  sta slst,x
-  iny
-  lda (ptr),y
-  sta sr0,x
-  iny
-  lda (ptr),y
-  sta sn,x
-  lda ptr
-  clc
-  adc #3
-  sta sdl,x
-  lda ptr+1
-  adc #0
-  sta sdh,x
-  cpx #1
-  bne :+
-  lda scl2
-  sta scls
-: rts
-
 ; rr = row, X = set: carry set if the row is not covered, else spc0/spc1 = first/last+1 column
 span_at:
   lda rr
@@ -1624,6 +849,18 @@ do_row:
   clc
   rts
 : lda havo
+  and havn
+  beq @diff
+  lda c0o                ; same footprint on this row: nothing to send
+  cmp c0n
+  bne @diff
+  lda c1o
+  cmp c1n
+  bne @diff
+  clc
+  rts
+@diff:
+  lda havo
   beq @unew
   lda havn
   beq @uold
@@ -2190,6 +1427,7 @@ upd_noise:
   dec m_age,x
 : rts
 
+.include "game.s"
 .include "../data.inc"
 
 .segment "STUB"
