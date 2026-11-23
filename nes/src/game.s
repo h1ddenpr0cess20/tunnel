@@ -213,6 +213,16 @@ reload_nt1:                ; forget any obstacle tiles left in the play nametabl
   lda #0
   sta PPUMASK
   lda PPUSTAT
+  lda #$20               ; the camera shear shows slivers of the other nametable: make it the tunnel too
+  sta PPUADDR
+  lda #$00
+  sta PPUADDR
+  lda #<NT1
+  sta ptr
+  lda #>NT1
+  sta ptr+1
+  jsr copy_nt
+  lda PPUSTAT
   lda #$24
   sta PPUADDR
   lda #$00
@@ -461,9 +471,8 @@ game_update:
   lda #1
   sta wh_dirty
 : ; camera for the renderer
-  lda xl
+  lda #0                 ; the camera is a per-band shear of the whole picture (calc_bands)
   sta cwl
-  lda xh
   sta cwh
 @ret:
   rts
@@ -2412,3 +2421,47 @@ build_pit:
   sta newrec
   rts
 RECIP8: .byte 255, 255, 128, 85, 64, 51, 43, 37, 32, 28, 26, 23, 21, 20, 19, 17, 16, 15, 14, 13, 13, 12, 12, 11, 11, 10, 10, 9, 9, 9, 8, 8
+
+; ------------------------------------------------------------------ camera
+; The tunnel is a fixed picture, so the camera is a shear: a point on the floor or ceiling that is
+; (r - 120) pixels from the horizon is 128/z = (r - 120) / (1 + eye) units close, so a lateral eye
+; move dx shifts that row by dx * |r - 120| pixels. One horizontal scroll per 32-line band.
+BAND_W:  .byte 96, 72, 40, 8, 24, 56, 88, 0
+
+calc_bands:
+  ldx #7
+@b:
+  lda state
+  beq @flat              ; title / game over: the picture stays put
+  cmp #3
+  beq @flat
+  lda BAND_W,x
+  beq @flat
+  sta mBl
+  lda #0
+  sta mBh
+  lda xl
+  sta mAl
+  lda xh
+  sta mAh
+  stx t3
+  jsr smulu              ; dx * w, 8.8 -> pixels in mR1
+  ldx t3
+  lda mR1
+  jmp @put
+@flat:
+  lda #0
+@put:
+  clc
+  adc sx                 ; crash shake
+  sta nbx,x
+  lda ctrl
+  ldy nbx,x
+  bpl :+                 ; negative scroll: show the left neighbour's right edge
+  eor #1
+: sta nbc,x
+  lda #0
+  sta nby,x
+  dex
+  bpl @b
+  rts

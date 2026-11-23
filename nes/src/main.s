@@ -206,6 +206,7 @@ reset:
   sta mask
   lda #$88
   sta ctrl
+  jsr calc_bands
   lda PPUSTAT
   lda ctrl
   sta PPUCTRL
@@ -233,6 +234,7 @@ st_title:
   jsr tunnel_anim
   jsr clear_sprites
   jsr update_pal
+  jsr calc_bands
   lda padn
   and #BTN_START
   beq main
@@ -243,6 +245,7 @@ st_over:
   jsr tunnel_anim
   jsr clear_sprites
   jsr update_pal
+  jsr calc_bands
   lda padn
   and #BTN_START
   beq main
@@ -262,6 +265,7 @@ st_run:
   jsr draw_obstacles
   jsr tunnel_anim
   jsr update_pal
+  jsr calc_bands
   jmp main
 
 st_dying:
@@ -269,6 +273,7 @@ st_dying:
   jsr draw_obstacles
   jsr tunnel_anim
   jsr update_pal
+  jsr calc_bands
   jmp main
 
 wait_nmi:
@@ -514,7 +519,7 @@ nmi:
   pla
   rti
 
-IRQ_FIRST = 31
+IRQ_FIRST = 15             ; the HUD row stays still; the camera shear starts below it
 IRQ_LATCH = 31
 
 set_banks:                 ; vblank: pick this frame's tunnel state, arm the band IRQ
@@ -523,9 +528,18 @@ set_banks:                 ; vblank: pick this frame's tunnel state, arm the ban
   ldx cycle
   lda STATEBANK,x
   sta $8001              ; band 0 for the top of the screen
-  clc
-  adc #2
-  sta ibank              ; the IRQ moves on to band 1, 2, ...
+  sta ibank              ; the IRQ rewrites band 0, then moves on to band 1, 2, ...
+  lda #0
+  sta iseq
+  ldx #7
+: lda nbx,x
+  sta bsx,x
+  lda nbc,x
+  sta bsc,x
+  lda nby,x
+  sta bsy,x
+  dex
+  bpl :-
   sta $E000              ; acknowledge / disable
   lda #IRQ_FIRST
   sta $C000
@@ -652,18 +666,37 @@ ppu_update:
   sta PPUMASK
   rts
 
-irq:                       ; every 32 scanlines: next band of tunnel tiles. The write is first for timing.
+irq:                       ; 8 per frame: next band of tunnel tiles + that band's camera shear
   sta ia
   lda ibank
-  sta $8001
+  sta $8001              ; (the first IRQ rewrites band 0)
   sta $E000              ; acknowledge
   sta $E001              ; re-arm
   clc
   adc #2
   sta ibank
+  stx ix
+  ldx iseq
+  inx
+  stx iseq
+  dex
   lda #IRQ_LATCH
-  sta $C000
+  cpx #0
+  bne :+
+  lda #15                ; band 0 is entered at line 16, band 1 at line 32
+: sta $C000
   sta $C001
+  bit PPUSTAT
+  lda bsc,x
+  sta PPUCTRL
+  lda bsx,x
+  sta PPUSCRL
+  lda bsy,x
+  sta PPUSCRL
+  cpx #7
+  bne :+
+  sta $E000              ; last band: no more IRQs this frame
+: ldx ix
   lda ia
   rti
 

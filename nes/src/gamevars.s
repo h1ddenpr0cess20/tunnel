@@ -86,4 +86,12 @@ oldrec:  .res 192        ; per slot: what is drawn on screen (64 bytes each)
 newrec:  .res 64
 lightbuf: .res 6
 fdig:    .res 4
+iseq:    .res 1          ; IRQ sequence number (band)
+ix:      .res 1
+bsx:     .res 8          ; per band: horizontal scroll, nametable select, vertical scroll
+bsc:     .res 8
+bsy:     .res 8
+nbx:     .res 8          ; next frame's values, copied in the NMI
+nbc:     .res 8
+nby:     .res 8
 
