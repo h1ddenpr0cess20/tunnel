@@ -202,7 +202,8 @@ reset:
   lda #2
   sta state
   jsr go_title
-  lda #$0A               ; background only: the sprite page holds the camera's scroll list
+  lda #$0E               ; background only (the sprite page holds the camera's scroll list); both
+                         ; left-column bits set, or jsnes blanks the left 8 pixels
   sta mask
   lda #$88
   sta ctrl
@@ -529,6 +530,7 @@ nmi:
 
 IRQ_FIRST = 15             ; the HUD rows stay still; the camera scroll starts below them
 IRQ_LATCH = 31
+BANK_DELAY = 3            ; IRQ busy-wait (5 cycles per step) so the bank write lands in hblank
 
 set_banks:                 ; vblank: pick this frame's tunnel state, arm the band IRQ
   lda #0
@@ -670,23 +672,13 @@ ppu_update:
   sta PPUMASK
   rts
 
-irq:                       ; one per scroll list entry: tile bank and full scroll at band starts, else X only
-  sta ia
-  stx ix
+irq:                       ; one per scroll list entry: full scroll and tile bank at band starts, else X only
+  sta ia                 ; (the writes land late on the line before the entry's line, before the PPU's
+  stx ix                 ; end-of-line Y increment, so the full entries hold their source line minus one)
   ldx iseq
   inc iseq
   lda ev_n,x
   bpl @xonly
-  lda ibank
-  sta $8001              ; (the first IRQ rewrites band 0)
-  clc
-  adc #2
-  sta ibank
-  sta $E000              ; acknowledge
-  sta $E001              ; re-arm
-  lda ev_l,x             ; lines until the next entry, minus one
-  sta $C000
-  sta $C001
   lda busy               ; the main loop is writing VRAM with rendering off: leave the PPU alone
   bne :+
   bit PPUSTAT            ; mid-frame scroll: nametable, Y, X, then the low address byte loads v
@@ -698,7 +690,22 @@ irq:                       ; one per scroll list entry: tile bank and full scrol
   sta PPUSCRL
   lda ev_o,x
   sta PPUADDR
-: lda ev_n,x
+: sta $E000              ; acknowledge
+  sta $E001              ; re-arm
+  lda ev_l,x             ; lines until the next entry, minus one
+  sta $C000
+  sta $C001
+  ldx #BANK_DELAY        ; the tile bank switches in hblank, after this line's last fetches
+: dex
+  bne :-
+  ldx iseq
+  dex
+  lda ibank
+  sta $8001              ; (the first IRQ rewrites band 0)
+  clc
+  adc #2
+  sta ibank
+  lda ev_n,x
   and #$40
   beq @r
   sta $E000              ; last entry: no more IRQs this frame

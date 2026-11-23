@@ -55,8 +55,6 @@ nc0:     .res 1
 nc1:     .res 1
 nr0:     .res 1
 nr1:     .res 1
-cwl:     .res 1          ; camera x
-cwh:     .res 1
 stype:   .res 1
 late:    .res 1
 slane:   .res 1
@@ -101,7 +99,6 @@ efront:  .res 1         ; buffer the IRQ reads
 epend:   .res 1         ; buffer ready for the next frame ($FF: none)
 eb:      .res 1
 ei:      .res 1
-rowev:   .res 30        ; per screen tile row: the scroll list entry that shows it, for the obstacles
 nbf:     .res 8          ; per band: vertical shift (pixels the picture moves up)
 nby:     .res 8          ; per band: first source line
 nbs:     .res 8          ; per band: first screen line
@@ -136,7 +133,6 @@ cpl:     .res 1          ; its screen line
 cctl:    .res 1
 ccnt:    .res 1          ; strips in this band after its first entry
 ctmp:    .res 1
-crow:    .res 1
 ckey:    .res 13         ; what the last scroll list was built from: x, roll, shake, ctrl, vertical shifts
 bph:     .res 1          ; head bob phase
 cdxl:    .res 1          ; camera x, y (8.8) and roll
@@ -146,17 +142,3 @@ cdyh:    .res 1
 crll:    .res 1
 crlh:    .res 1
 ctx:     .res 1
-tsp:     .res 64         ; scratch: footprint columns by row
-sh_r0:   .res 1
-sh_n:    .res 1
-sh_cls:  .res 1
-sh_flag: .res 1
-sh_c0:   .res 1
-sh_c1:   .res 1
-sh_lo:   .res 1
-sh_hi:   .res 1
-sh_d:    .res 1
-sh_fq:   .res 1
-sh_sh:   .res 1
-sh_t:    .res 1
-sh_o:    .res 1

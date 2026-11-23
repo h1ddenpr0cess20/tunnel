@@ -63,6 +63,7 @@ soundtrack. Play it in the browser at `/nes.html` (jsnes) or load `nes/tunnel.ne
   while changing lanes, head bob, pitch when falling into a pit). The tunnel picture is fixed, so the
   camera is a shear of it: an MMC3 scanline IRQ rewrites the scroll every 8 lines (sideways) and every
   32-line tile band (vertical), from a list the main loop rebuilds only when the camera moves.
+  Obstacles are drawn into the centred picture, so the same scroll carries them with the tunnel.
 
 Known differences: obstacles are tile footprints rather than ray-traced boxes (no side faces or pit
 walls); the sideways camera shears the picture row by row, so off-centre the tunnel's rings bend

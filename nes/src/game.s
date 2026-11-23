@@ -285,7 +285,7 @@ reload_nt1:                ; forget any obstacle tiles left in the play nametabl
   lda #0
   sta PPUMASK
   lda PPUSTAT
-  lda #$20               ; the camera shear shows slivers of the other nametable: make it the tunnel too
+  lda #$20               ; the camera shear shows slivers of the other nametable: the wall edge filler
   sta PPUADDR
   lda #$00
   sta PPUADDR
@@ -542,11 +542,7 @@ game_update:
   bne :+
   lda #1
   sta wh_dirty
-: ; camera for the renderer
-  lda xl                 ; obstacles are projected from the real camera; shear_rec then adds the
-  sta cwl                ; band scroll the picture is about to be moved by
-  lda xh
-  sta cwh
+:
 @ret:
   rts
 
@@ -1910,7 +1906,6 @@ update_slot:
   lda o_type,x
   beq @gone
   jsr build_new
-  jsr shear_rec
   jmp @have
 @gone:
   lda o_ds,x
@@ -2205,14 +2200,12 @@ load_scy:
   sta mBh
   rts
 
-; column of (edge - camera) at scale idx X: edge in (gt3:gt2)
+; column of an edge at scale idx X: edge in (gt3:gt2). Obstacles are drawn into the nominal (centred)
+; picture: the camera's scroll moves them together with the tunnel around them.
 proj_col:
-  sec
   lda gt2
-  sbc cwl
   sta mAl
   lda gt3
-  sbc cwh
   sta mAh
   jsr load_scx
   jsr smulu
@@ -2908,13 +2901,16 @@ calc_bands:
   lsr a
   lsr a
   sta ctx
-  lda cs
+  ldy cs                 ; the write lands before this line's Y increment: one line early
+  dey
+  tya
   sta ev_y,x
   and #$38
   asl a
   asl a
   ora ctx
   sta ev_o,x
+  ldy ev_x,x
   lda cnt_
   cpy #$80
   bcc :+
@@ -2923,16 +2919,6 @@ calc_bands:
   sta ev_n,x
   lda #7
   sta ev_l,x
-  lda cl                 ; the tile rows at the middle of each strip, for the obstacles
-  clc
-  adc #4
-  lsr a
-  lsr a
-  lsr a
-  tay
-  txa
-  sta rowev,y
-  iny
   inx
   lda ccnt
   sta ctmp
@@ -2955,7 +2941,6 @@ calc_bands:
   jmp @hv
 @cr:
   stx ei                 ; crossing the horizon: below it, 8 - w lines from it
-  sty crow
   lda #8
   sec
   sbc cwd
@@ -2970,7 +2955,6 @@ calc_bands:
   lda #0
   sta cside
   ldx ei
-  ldy crow
   jmp @hv
 @dn:
   clc
@@ -3001,9 +2985,6 @@ calc_bands:
   sta ev_n,x
   lda #7
   sta ev_l,x
-  txa
-  sta rowev,y
-  iny
   inx
   dec ctmp
   beq @bend
@@ -3026,14 +3007,14 @@ calc_bands:
   lda nbs+7
   sta cl
   jsr @fix
-  lda #224
+  lda #223               ; line 224, one early (see above)
   sta ev_y,x
   lda sx
   sta ev_x,x
   lsr a
   lsr a
   lsr a
-  ora #$80               ; (224 & $38) << 2
+  ora #$60               ; (223 & $38) << 2
   sta ev_o,x
   lda #$C0               ; bank switch, last
   ldy sx
@@ -3168,164 +3149,3 @@ QS_HI:
   .byte >((i * i) / 4)
 .endrep
 
-; ------------------------------------------------------------------ obstacles under the camera shear
-; newrec is the footprint on the nominal tunnel. The picture is scrolled per band (calc_bands), so the
-; tiles must be drawn where that scroll will carry them onto the right place: row D of the screen
-; shows target row D - fq and column + sh. Rewrites newrec as a per-row list in drawn coordinates.
-shear_rec:
-  lda newrec+2
-  bne :+
-  rts                    ; empty footprint: nothing to move
-: lda newrec+1           ; (tsp is only read for rows the footprint covers, which are written first)
-  sta sh_r0
-  lda newrec+2
-  sta sh_n
-  lda newrec
-  and #$7F
-  sta sh_cls
-  lda newrec
-  and #$80
-  sta sh_flag
-  ldx #0
-@ex:
-  cpx sh_n
-  bcs @exd
-  lda sh_flag
-  beq @rect
-  txa
-  asl a
-  tay
-  lda newrec+3,y
-  sta sh_c0
-  lda newrec+4,y
-  sta sh_c1
-  jmp @st
-@rect:
-  lda newrec+3
-  sta sh_c0
-  lda newrec+4
-  sta sh_c1
-@st:
-  txa
-  clc
-  adc sh_r0
-  asl a
-  tay
-  lda sh_c0
-  sta tsp,y
-  lda sh_c1
-  sta tsp+1,y
-  inx
-  jmp @ex
-@exd:
-  lda sh_r0
-  cmp #4
-  bcs :+
-  lda #4
-: sec
-  sbc #2
-  sta sh_lo
-  lda sh_r0
-  clc
-  adc sh_n
-  clc
-  adc #2
-  cmp #29
-  bcc :+
-  lda #29
-: sta sh_hi
-  lda #0
-  sta sh_o
-  lda sh_lo
-  sta sh_d
-@d:
-  lda sh_d
-  cmp sh_hi
-  bcc :+
-  jmp @done
-: lsr a
-  lsr a
-  tay
-  lda nbf,y
-  cmp #$80
-  ror a
-  cmp #$80
-  ror a
-  cmp #$80
-  ror a
-  sta sh_fq
-  ldy sh_d
-  ldx rowev,y            ; this screen row's sideways shift in tiles
-  lda ev_x,x
-  clc
-  adc #4
-  cmp #$80
-  ror a
-  cmp #$80
-  ror a
-  cmp #$80
-  ror a
-  sta sh_sh
-  lda sh_d
-  sec
-  sbc sh_fq
-  sta sh_t
-  cmp sh_r0
-  bcc @none
-  sec
-  sbc sh_r0
-  cmp sh_n
-  bcs @none
-  lda sh_t
-  asl a
-  tay
-  lda tsp,y
-  clc
-  adc sh_sh
-  jsr @clamp
-  sta sh_c0
-  lda sh_t
-  asl a
-  tay
-  lda tsp+1,y
-  clc
-  adc sh_sh
-  jsr @clamp
-  sta sh_c1
-  jmp @put
-@none:
-  lda #0
-  sta sh_c0
-  sta sh_c1
-@put:
-  ldy sh_o
-  lda sh_c0
-  sta newrec+3,y
-  lda sh_c1
-  sta newrec+4,y
-  iny
-  iny
-  sty sh_o
-  inc sh_d
-  jmp @d
-@done:
-  lda sh_cls
-  ora #$80
-  sta newrec
-  lda sh_lo
-  sta newrec+1
-  lda sh_hi
-  sec
-  sbc sh_lo
-  sta newrec+2
-  rts
-@clamp:                  ; A signed -> 0..32
-  bmi @c0
-  cmp #33
-  bcc @cr
-  lda #32
-@cr:
-  rts
-@c0:
-  lda #0
-  rts
