@@ -329,9 +329,12 @@ t1, a1 = nametable()
 put(t1, 1, 1, 'RUN 000000 M')
 put(t1, 1, 15, 'TO LIGHT')
 put(t1, 1, 31, 'M')
+t2, a2 = nametable()          # the second nametable while playing: it carries the status line (row 28)
+# The play nametable keeps tunnel tiles in rows 28-29: the camera's vertical shear can scroll them into view.
 for r in (28, 29):
-    for c in range(4, 28): t1[r][c] = BLANK_TILE; a1[r//2][c//2] = 3
-for name, (t, a) in (('NT0', (t0, a0)), ('NT1', (t1, a1))):
+    for c in range(32): t1[r][c] = (r % 4) * 32 + c
+for c in range(16): a1[14][c] = a1[13][c]
+for name, (t, a) in (('NT0', (t0, a0)), ('NT1', (t1, a1)), ('NT2', (t2, a2))):
     label(name)
     bytes_([v for row in t for v in row] + pack_attr(a), 32)
 

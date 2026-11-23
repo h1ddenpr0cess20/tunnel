@@ -262,18 +262,18 @@ st_run:
   jsr update_pal
   jmp main
 : jsr game_update
-  jsr draw_obstacles
   jsr tunnel_anim
   jsr update_pal
   jsr calc_bands
+  jsr draw_obstacles
   jmp main
 
 st_dying:
   jsr dying_update
-  jsr draw_obstacles
   jsr tunnel_anim
   jsr update_pal
   jsr calc_bands
+  jsr draw_obstacles
   jmp main
 
 wait_nmi:
@@ -519,7 +519,7 @@ nmi:
   pla
   rti
 
-IRQ_FIRST = 15             ; the HUD row stays still; the camera shear starts below it
+IRQ_FIRST = 15             ; the HUD rows stay still; the camera scroll starts below them
 IRQ_LATCH = 31
 
 set_banks:                 ; vblank: pick this frame's tunnel state, arm the band IRQ
@@ -532,12 +532,16 @@ set_banks:                 ; vblank: pick this frame's tunnel state, arm the ban
   lda #0
   sta iseq
   ldx #7
-: lda nbx,x
+: lda nbx,x              ; the camera's per-band scroll, computed by the main loop
   sta bsx,x
-  lda nbc,x
-  sta bsc,x
+  lda nbn,x
+  sta bsn,x
   lda nby,x
   sta bsy,x
+  lda nbo,x
+  sta bso,x
+  lda nbl,x
+  sta bsl,x
   dex
   bpl :-
   sta $E000              ; acknowledge / disable
@@ -589,7 +593,7 @@ ppu_update:
   beq @nowh
   lda #0
   sta wh_dirty
-  lda #$27
+  lda #$23               ; the status line lives in the first nametable
   sta PPUADDR
   lda #$80
   sta PPUADDR
@@ -666,7 +670,7 @@ ppu_update:
   sta PPUMASK
   rts
 
-irq:                       ; 8 per frame: next band of tunnel tiles + that band's camera shear
+irq:                       ; 8 per frame: next band of tunnel tiles, then that band's camera scroll
   sta ia
   lda ibank
   sta $8001              ; (the first IRQ rewrites band 0)
@@ -677,26 +681,26 @@ irq:                       ; 8 per frame: next band of tunnel tiles + that band'
   sta ibank
   stx ix
   ldx iseq
-  inx
-  stx iseq
-  dex
-  lda #IRQ_LATCH
-  cpx #0
-  bne :+
-  lda #15                ; band 0 is entered at line 16, band 1 at line 32
-: sta $C000
+  lda bsl,x              ; lines until the next band starts
+  sta $C000
   sta $C001
-  bit PPUSTAT
-  lda bsc,x
-  sta PPUCTRL
-  lda bsx,x
-  sta PPUSCRL
+  lda busy               ; the main loop is writing VRAM with rendering off: leave the PPU alone
+  bne @skip
+  bit PPUSTAT            ; mid-frame scroll: nametable, Y, X, then the low address byte loads v
+  lda bsn,x
+  sta PPUADDR
   lda bsy,x
   sta PPUSCRL
+  lda bsx,x
+  sta PPUSCRL
+  lda bso,x
+  sta PPUADDR
+@skip:
   cpx #7
   bne :+
   sta $E000              ; last band: no more IRQs this frame
-: ldx ix
+: inc iseq
+  ldx ix
   lda ia
   rti
 
@@ -844,6 +848,8 @@ span_at:
   iny
   lda (ptr2),y
   sta spc1
+  cmp spc0
+  beq @empty             ; zero width: nothing here
   clc
   rts
 @empty:

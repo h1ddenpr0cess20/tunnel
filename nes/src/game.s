@@ -217,9 +217,9 @@ reload_nt1:                ; forget any obstacle tiles left in the play nametabl
   sta PPUADDR
   lda #$00
   sta PPUADDR
-  lda #<NT1
+  lda #<NT2
   sta ptr
-  lda #>NT1
+  lda #>NT2
   sta ptr+1
   jsr copy_nt
   lda PPUSTAT
@@ -471,8 +471,9 @@ game_update:
   lda #1
   sta wh_dirty
 : ; camera for the renderer
-  lda #0                 ; the camera is a per-band shear of the whole picture (calc_bands)
-  sta cwl
+  lda xl                 ; obstacles are projected from the real camera; shear_rec then adds the
+  sta cwl                ; band scroll the picture is about to be moved by
+  lda xh
   sta cwh
 @ret:
   rts
@@ -1837,6 +1838,7 @@ update_slot:
   lda o_type,x
   beq @gone
   jsr build_new
+  jsr shear_rec
   jmp @have
 @gone:
   lda o_ds,x
@@ -2423,45 +2425,496 @@ build_pit:
 RECIP8: .byte 255, 255, 128, 85, 64, 51, 43, 37, 32, 28, 26, 23, 21, 20, 19, 17, 16, 15, 14, 13, 13, 12, 12, 11, 11, 10, 10, 9, 9, 9, 8, 8
 
 ; ------------------------------------------------------------------ camera
-; The tunnel is a fixed picture, so the camera is a shear: a point on the floor or ceiling that is
-; (r - 120) pixels from the horizon is 128/z = (r - 120) / (1 + eye) units close, so a lateral eye
-; move dx shifts that row by dx * |r - 120| pixels. One horizontal scroll per 32-line band.
+; The tunnel is a fixed picture, so the camera is a shear of it: a floor or ceiling point that is
+; (r - 120) pixels from the horizon is 128/z = (r - 120) / (1 + eye) units close, so an eye move of
+; dx, dy shifts that row by dx * |r - 120| pixels sideways and dy * |r - 120| pixels vertically;
+; roll turns the picture about the centre. The shift is applied per 32-line band with a mid-frame
+; scroll write. The band's tile bank switches on the line where its source pixels start, so the
+; per-band tile images always match. Vertical motion is scaled to a quarter and clamped to 16 px.
 BAND_W:  .byte 96, 72, 40, 8, 24, 56, 88, 0
+BOBX:    .byte 0,0,0,1,1,1,1,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1,1,1,1,1,1,0,0
+BOBY:    .byte 253,254,254,255,255,0,0,1,1,1,2,2,2,2,2,3,3,3,2,2,2,2,2,1,1,1,0,0,255,255,254,254
 
 calc_bands:
-  ldx #7
-@b:
+  lda #0
+  sta cdxl
+  sta cdxh
+  sta cdyl
+  sta cdyh
+  sta crll
+  sta crlh
   lda state
   beq @flat              ; title / game over: the picture stays put
   cmp #3
-  beq @flat
-  lda BAND_W,x
-  beq @flat
+  bne :+
+@flat:
+  jmp @bands
+: ; --- head bob while running on the floor
+  ldx #0
+  lda state
+  cmp #1
+  bne @nobob
+  lda hl
+  ora hhi
+  bne @nobob
+  lda slt
+  bne @nobob
+  lda vh_
+  lsr a
+  lsr a
+  lsr a
+  sta ctx
+  lda vh_
+  sec
+  sbc ctx
+  clc
+  adc #8                 ; 256 * (1.8 + 0.2 v) / 60 per frame
+  clc
+  adc bph
+  sta bph
+  bcc :+
+  lda bpar
+  eor #1
+  sta bpar
+: lda bph
+  lsr a
+  lsr a
+  lsr a
+  tax
+  lda BOBX,x
+  ldy bpar
+  beq :+
+  eor #$FF
+  clc
+  adc #1
+: sta cdxl
+  ora #0
+  bpl :+
+  lda #$FF
+  sta cdxh
+: lda BOBY,x
+  sta cdyl
+  bpl :+
+  lda #$FF
+  sta cdyh
+: 
+@nobob:
+  ; x and eye height
+  clc
+  lda xl
+  adc cdxl
+  sta cdxl
+  lda xh
+  adc cdxh
+  sta cdxh
+  clc
+  lda eyel
+  adc cdyl
+  sta cdyl
+  lda eyeh
+  adc cdyh
+  sta cdyh
+  lda cdyh                ; clamp to (-0.95, 0.9)
+  bmi @neg
+  beq @ycl
+  lda #230
+  sta cdyl
+  lda #0
+  sta cdyh
+  jmp @ycl
+@neg:
+  cmp #$FF
+  bne @low
+  lda cdyl
+  cmp #13
+  bcs @ycl
+@low:
+  lda #13
+  sta cdyl
+  lda #$FF
+  sta cdyh
+@ycl:
+  ; roll = (x - lane centre) * 0.07
+  ldy lane
+  sec
+  lda xl
+  sbc LANE_C_L,y
+  sta mAl
+  lda xh
+  sbc LANE_C_H,y
+  sta mAh
+  lda #18
   sta mBl
   lda #0
   sta mBh
-  lda xl
-  sta mAl
-  lda xh
-  sta mAh
+  jsr smulu
+  lda mR1
+  sta crll
+  lda mR2
+  sta crlh
+@bands:
+  ldx #7
+@b:
+  lda #0
+  sta nbf,x
   stx t3
-  jsr smulu              ; dx * w, 8.8 -> pixels in mR1
+  lda BAND_W,x
+  bne :+
+  lda sx                  ; the status line only shakes
+  sta nbx,x
+  jmp @next
+: sta ctx
+  ; sideways: dx * w
+  sta mBl
+  lda #0
+  sta mBh
+  lda cdxl
+  sta mAl
+  lda cdxh
+  sta mAh
+  jsr smulu
+  lda mR1
+  pha
+  ; roll: signed distance from the horizon
+  lda ctx
+  sta mBl
+  lda #0
+  sta mBh
+  lda crll
+  sta mAl
+  lda crlh
+  sta mAh
+  jsr smulu
   ldx t3
   lda mR1
-  jmp @put
-@flat:
-  lda #0
-@put:
+  cpx #4
+  bcs :+                  ; above the horizon the sign flips
+  eor #$FF
   clc
-  adc sx                 ; crash shake
+  adc #1
+: clc
+  adc sx
   sta nbx,x
-  lda ctrl
-  ldy nbx,x
-  bpl :+                 ; negative scroll: show the left neighbour's right edge
-  eor #1
-: sta nbc,x
+  pla
+  clc
+  adc nbx,x
+  sta nbx,x
+  ; vertical: dy * w / 4, picture moves down when the eye rises
+  lda ctx
+  sta mBl
   lda #0
-  sta nby,x
+  sta mBh
+  lda cdyl
+  sta mAl
+  lda cdyh
+  sta mAh
+  jsr smulu
+  ldx t3
+  lda mR1
+  cmp #$80
+  ror a
+  cmp #$80
+  ror a
+  eor #$FF
+  clc
+  adc #1                  ; f = -(dy * w) / 4
+  sta nbf,x
+@next:
+  ; falling into a pit: the camera pitches down
+  lda state
+  cmp #2
+  bne @nopit
+  lda kind
+  bne @nopit
+  lda deadt
+  lsr a
+  cmp #16
+  bcc :+
+  lda #16
+: clc
+  adc nbf,x
+  sta nbf,x
+@nopit:
+  ; clamp f to -16..16 (band 0 must not reveal the HUD: f >= 0)
+  lda nbf,x
+  bmi @fneg
+  cmp #17
+  bcc @fok
+  lda #16
+  bne @fok
+@fneg:
+  cmp #$F0
+  bcs @fok
+  lda #$F0
+@fok:
+  cpx #0
+  bne :+
+  cmp #$80
+  bcc :+
+  lda #0
+: cpx #7
+  bne :+
+  lda #0
+: sta nbf,x
   dex
-  bpl @b
+  bmi :+
+  jmp @b
+: ; --- second pass: nametable bits, scroll values, and where each band starts on the screen
+  ldx #7
+@p:
+  lda nbx,x
+  tay
+  lda #0
+  cpx #7
+  beq @nt
+  lda ctrl
+  and #1
+  asl a
+  asl a
+@nt:
+  cpy #$80
+  bcc :+
+  eor #4                  ; negative scroll: the left neighbour's right edge
+: sta nbn,x
+  ; Y: band 0 starts at line 16, the others at their source line 32 * b
+  txa
+  asl a
+  asl a
+  asl a
+  asl a
+  asl a
+  cpx #7
+  bne :+
+  lda #224
+: cpx #0
+  bne :+
+  lda #16
+  clc
+  adc nbf,x
+: sta nby,x
+  ; low byte of v: coarse Y low bits, coarse X
+  lda nby,x
+  lsr a
+  lsr a
+  lsr a
+  and #7
+  asl a
+  asl a
+  asl a
+  asl a
+  asl a
+  sta ctx
+  lda nbx,x
+  lsr a
+  lsr a
+  lsr a
+  ora ctx
+  sta nbo,x
+  dex
+  bpl @p
+  ; where each band starts on the screen: S0 = 16, S_b = 32 b - max(f_b, f_(b-1)) (the later band never
+  ; starts after the line where the previous band's source pixels run out)
+  lda #16
+  sta nbs
+  ldx #1
+@s:
+  lda nbf,x
+  sta ctx
+  lda nbf-1,x
+  sec
+  sbc ctx
+  bvc :+
+  eor #$80
+: bmi :+                 ; f_(b-1) >= f_b: take f_(b-1)
+  lda nbf-1,x
+  sta ctx
+: txa
+  asl a
+  asl a
+  asl a
+  asl a
+  asl a
+  sec
+  sbc ctx
+  sta nbs,x
+  inx
+  cpx #8
+  bne @s
+  ldx #6                 ; lines from one start to the next, minus one
+@l:
+  lda nbs+1,x
+  sec
+  sbc nbs,x
+  sec
+  sbc #1
+  sta nbl,x
+  dex
+  bpl @l
+  lda #0
+  sta nbl+7
+  rts
+
+; ------------------------------------------------------------------ obstacles under the camera shear
+; newrec is the footprint on the nominal tunnel. The picture is scrolled per band (calc_bands), so the
+; tiles must be drawn where that scroll will carry them onto the right place: row D of the screen
+; shows target row D - fq and column + sh. Rewrites newrec as a per-row list in drawn coordinates.
+shear_rec:
+  lda newrec+2
+  bne :+
+  rts                    ; empty footprint: nothing to move
+: ldx #63
+  lda #0
+: sta tsp,x
+  dex
+  bpl :-
+  lda newrec+1
+  sta sh_r0
+  lda newrec+2
+  sta sh_n
+  lda newrec
+  and #$7F
+  sta sh_cls
+  lda newrec
+  and #$80
+  sta sh_flag
+  ldx #0
+@ex:
+  cpx sh_n
+  bcs @exd
+  lda sh_flag
+  beq @rect
+  txa
+  asl a
+  tay
+  lda newrec+3,y
+  sta sh_c0
+  lda newrec+4,y
+  sta sh_c1
+  jmp @st
+@rect:
+  lda newrec+3
+  sta sh_c0
+  lda newrec+4
+  sta sh_c1
+@st:
+  txa
+  clc
+  adc sh_r0
+  asl a
+  tay
+  lda sh_c0
+  sta tsp,y
+  lda sh_c1
+  sta tsp+1,y
+  inx
+  jmp @ex
+@exd:
+  lda sh_r0
+  cmp #4
+  bcs :+
+  lda #4
+: sec
+  sbc #2
+  sta sh_lo
+  lda sh_r0
+  clc
+  adc sh_n
+  clc
+  adc #2
+  cmp #29
+  bcc :+
+  lda #29
+: sta sh_hi
+  lda #0
+  sta sh_o
+  lda sh_lo
+  sta sh_d
+@d:
+  lda sh_d
+  cmp sh_hi
+  bcc :+
+  jmp @done
+: lsr a
+  lsr a
+  tay
+  lda nbf,y
+  cmp #$80
+  ror a
+  cmp #$80
+  ror a
+  cmp #$80
+  ror a
+  sta sh_fq
+  lda nbx,y
+  clc
+  adc #4
+  cmp #$80
+  ror a
+  cmp #$80
+  ror a
+  cmp #$80
+  ror a
+  sta sh_sh
+  lda sh_d
+  sec
+  sbc sh_fq
+  sta sh_t
+  cmp sh_r0
+  bcc @none
+  sec
+  sbc sh_r0
+  cmp sh_n
+  bcs @none
+  lda sh_t
+  asl a
+  tay
+  lda tsp,y
+  clc
+  adc sh_sh
+  jsr @clamp
+  sta sh_c0
+  lda sh_t
+  asl a
+  tay
+  lda tsp+1,y
+  clc
+  adc sh_sh
+  jsr @clamp
+  sta sh_c1
+  jmp @put
+@none:
+  lda #0
+  sta sh_c0
+  sta sh_c1
+@put:
+  ldy sh_o
+  lda sh_c0
+  sta newrec+3,y
+  lda sh_c1
+  sta newrec+4,y
+  iny
+  iny
+  sty sh_o
+  inc sh_d
+  jmp @d
+@done:
+  lda sh_cls
+  ora #$80
+  sta newrec
+  lda sh_lo
+  sta newrec+1
+  lda sh_hi
+  sec
+  sbc sh_lo
+  sta newrec+2
+  rts
+@clamp:                  ; A signed -> 0..32
+  bmi @c0
+  cmp #33
+  bcc @cr
+  lda #32
+@cr:
+  rts
+@c0:
+  lda #0
   rts

@@ -88,10 +88,38 @@ lightbuf: .res 6
 fdig:    .res 4
 iseq:    .res 1          ; IRQ sequence number (band)
 ix:      .res 1
-bsx:     .res 8          ; per band: horizontal scroll, nametable select, vertical scroll
-bsc:     .res 8
+bsx:     .res 8          ; per band, as the IRQ uses them: X scroll, nametable bits, Y scroll, low v byte, lines to the next band
+bsn:     .res 8
 bsy:     .res 8
+bso:     .res 8
+bsl:     .res 8
 nbx:     .res 8          ; next frame's values, copied in the NMI
-nbc:     .res 8
+nbn:     .res 8
 nby:     .res 8
-
+nbo:     .res 8
+nbl:     .res 8
+nbf:     .res 8
+nbs:     .res 8          ; first screen line of each band          ; per band vertical shift (pixels the picture moves up)
+bph:     .res 1          ; head bob phase
+bpar:    .res 1
+cdxl:    .res 1          ; camera x, y (8.8) and roll
+cdxh:    .res 1
+cdyl:    .res 1
+cdyh:    .res 1
+crll:    .res 1
+crlh:    .res 1
+ctx:     .res 1
+tsp:     .res 64         ; scratch: footprint columns by row
+sh_r0:   .res 1
+sh_n:    .res 1
+sh_cls:  .res 1
+sh_flag: .res 1
+sh_c0:   .res 1
+sh_c1:   .res 1
+sh_lo:   .res 1
+sh_hi:   .res 1
+sh_d:    .res 1
+sh_fq:   .res 1
+sh_sh:   .res 1
+sh_t:    .res 1
+sh_o:    .res 1
